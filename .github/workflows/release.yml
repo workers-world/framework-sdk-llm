@@ -1,0 +1,57 @@
+on:
+  push:
+    # Sequence of patterns matched against refs/tags
+    tags:
+      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+
+name: Create Release
+
+jobs:
+  build:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整提交历史
+      - name: Get Previous Tag
+        id: prev_tag
+        run: |
+          # 获取当前推送的 tag
+          CURRENT_TAG=${GITHUB_REF#refs/tags/}
+          
+          # 获取上一个 tag (按版本号排序)
+          PREV_TAG=$(git tag --sort=-v:refname | grep -A1 "$CURRENT_TAG" | tail -n1)
+          
+          # 如果是第一个 tag，则使用初始 commit
+          if [ -z "$PREV_TAG" ]; then
+            PREV_TAG=$(git rev-list --max-parents=0 HEAD)
+          fi
+          
+          echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+          echo "current_tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
+      - name: Generate Changelog
+        id: changelog
+        run: |
+          # 生成两个 tag 之间的提交记录
+          echo "Changelog since ${{ steps.prev_tag.outputs.prev_tag }}:" > changelog.md
+          git log --pretty=format:"- %h %s (%an)" ${{ steps.prev_tag.outputs.prev_tag }}..${{ steps.prev_tag.outputs.current_tag }} >> changelog.md
+          
+          # 保存为多行输出
+          CHANGELOG=$(cat changelog.md)
+          echo "changelog<<EOF" >> $GITHUB_ENV
+          echo "$CHANGELOG" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
+        with:
+          tag_name: ${{ steps.prev_tag.outputs.current_tag }}
+          release_name: Release ${{ steps.prev_tag.outputs.current_tag }}
+          body: |
+            ${{ env.changelog }}
+          draft: false
+          prerelease: false
