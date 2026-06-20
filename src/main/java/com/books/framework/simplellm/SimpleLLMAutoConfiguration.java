@@ -1,5 +1,6 @@
 package com.books.framework.simplellm;
 
+import com.books.framework.llm.config.LlmHttpClientSupport;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
@@ -14,6 +15,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.web.client.RestClient;
 
 import java.util.List;
 
@@ -31,7 +33,15 @@ public class SimpleLLMAutoConfiguration {
     }
 
     @Bean
-    public ChatClient chatClient(SimpleLLMProperties props, ObjectProvider<JdbcTemplate> jdbcProvider) {
+    @ConditionalOnMissingBean(LlmHttpClientSupport.class)
+    public static LlmHttpClientSupport simpleLlmHttpClientSupport(ObjectProvider<RestClient.Builder> restClientBuilderProvider) {
+        return new LlmHttpClientSupport(restClientBuilderProvider);
+    }
+
+    @Bean
+    public ChatClient chatClient(SimpleLLMProperties props,
+                                 ObjectProvider<JdbcTemplate> jdbcProvider,
+                                 LlmHttpClientSupport httpClientSupport) {
         JdbcTemplate jdbc = jdbcProvider.getIfAvailable();
         if (jdbc != null) {
             ensureTables(jdbc);
@@ -44,6 +54,7 @@ public class SimpleLLMAutoConfiguration {
         OpenAiApi api = OpenAiApi.builder()
                 .baseUrl(cfg.endpoint)
                 .apiKey(cfg.apiKey)
+                .restClientBuilder(httpClientSupport.outboundRestClientBuilder())
                 .build();
         ChatModel model = OpenAiChatModel.builder()
                 .openAiApi(api)

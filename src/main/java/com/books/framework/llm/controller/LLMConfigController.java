@@ -5,6 +5,7 @@ import com.books.framework.constants.ErrorCodeEnum;
 import com.books.framework.exception.AppException;
 import com.books.framework.llm.LLMService;
 import com.books.framework.llm.config.ChatModelFactory;
+import com.books.framework.llm.config.LlmHttpClientSupport;
 import com.books.framework.llm.dto.*;
 import com.books.framework.llm.model.LLMBackendConfig;
 import com.books.framework.message.BaseMessage;
@@ -30,17 +31,20 @@ public class LLMConfigController {
     private final Map<String, ChatModel> chatModels;
     private final Map<String, ChatClient> chatClients;
     private final List<ChatModelFactory> factories;
+    private final LlmHttpClientSupport httpClientSupport;
 
     public LLMConfigController(JdbcTemplate jdbc,
                                LLMService llmService,
                                Map<String, ChatModel> chatModels,
                                Map<String, ChatClient> chatClients,
-                               List<ChatModelFactory> factories) {
+                               List<ChatModelFactory> factories,
+                               LlmHttpClientSupport httpClientSupport) {
         this.jdbc = jdbc;
         this.llmService = llmService;
         this.chatModels = chatModels;
         this.chatClients = chatClients;
         this.factories = factories != null ? factories : Collections.emptyList();
+        this.httpClientSupport = httpClientSupport;
     }
 
     @ApiName(name = "llmListConfigs", output = {Map.class}, description = "列出所有后端配置")
@@ -235,7 +239,11 @@ public class LLMConfigController {
         }
         String apiKey = cfg.getApiKey() != null ? cfg.getApiKey() : "sk-placeholder";
         String defaultModel = cfg.getDefaultModel() != null ? cfg.getDefaultModel().split(",")[0].trim() : "gpt-4o";
-        OpenAiApi api = OpenAiApi.builder().baseUrl(baseUrl).apiKey(apiKey).build();
+        OpenAiApi api = OpenAiApi.builder()
+                .baseUrl(baseUrl)
+                .apiKey(apiKey)
+                .restClientBuilder(httpClientSupport.outboundRestClientBuilder())
+                .build();
         return OpenAiChatModel.builder()
                 .openAiApi(api)
                 .defaultOptions(OpenAiChatOptions.builder().model(defaultModel).build())

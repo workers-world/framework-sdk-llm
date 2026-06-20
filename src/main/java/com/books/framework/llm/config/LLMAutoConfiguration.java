@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.ollama.OllamaChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
@@ -24,6 +25,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.web.client.RestClient;
 
 import java.math.BigDecimal;
 import java.util.*;
@@ -34,6 +36,25 @@ import java.util.*;
 @ConditionalOnClass(org.springframework.ai.chat.model.ChatModel.class)
 @ConditionalOnProperty(name = "book.llm.enable", havingValue = "true")
 public class LLMAutoConfiguration {
+
+    private final LlmHttpClientSupport httpClientSupport;
+
+    public LLMAutoConfiguration(LlmHttpClientSupport httpClientSupport) {
+        this.httpClientSupport = httpClientSupport;
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(LlmHttpClientSupport.class)
+    public static LlmHttpClientSupport llmHttpClientSupport(ObjectProvider<RestClient.Builder> restClientBuilderProvider) {
+        return new LlmHttpClientSupport(restClientBuilderProvider);
+    }
+
+    @Bean
+    @ConditionalOnClass(OllamaChatModel.class)
+    @ConditionalOnMissingBean(OllamaChatModelConfig.class)
+    public OllamaChatModelConfig ollamaChatModelConfig(LlmHttpClientSupport httpClientSupport) {
+        return new OllamaChatModelConfig(httpClientSupport);
+    }
 
     // ===== 脱敏器 =====
 
@@ -141,8 +162,9 @@ public class LLMAutoConfiguration {
                                                     LLMService llmService,
                                                     @org.springframework.beans.factory.annotation.Qualifier("llmChatModels") Map<String, ChatModel> chatModels,
                                                     @org.springframework.beans.factory.annotation.Qualifier("llmChatClients") Map<String, ChatClient> chatClients,
-                                                    List<ChatModelFactory> factories) {
-        return new LLMConfigController(jdbc, llmService, chatModels, chatClients, factories);
+                                                    List<ChatModelFactory> factories,
+                                                    LlmHttpClientSupport httpClientSupport) {
+        return new LLMConfigController(jdbc, llmService, chatModels, chatClients, factories, httpClientSupport);
     }
 
     @Bean
@@ -190,7 +212,11 @@ public class LLMAutoConfiguration {
         }
         String apiKey = cfg.getApiKey() != null ? cfg.getApiKey() : "sk-placeholder";
         String defaultModel = model != null ? model.split(",")[0].trim() : "gpt-4o";
-        OpenAiApi api = OpenAiApi.builder().baseUrl(baseUrl).apiKey(apiKey).build();
+        OpenAiApi api = OpenAiApi.builder()
+                .baseUrl(baseUrl)
+                .apiKey(apiKey)
+                .restClientBuilder(httpClientSupport.outboundRestClientBuilder())
+                .build();
         return OpenAiChatModel.builder()
                 .openAiApi(api)
                 .defaultOptions(OpenAiChatOptions.builder().model(defaultModel).build())
