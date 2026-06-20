@@ -134,6 +134,7 @@ public class LLMExecuteController {
     private LLMCallOptions buildCallOptions(LLMExecuteX1 x1) {
         return LLMCallOptions.builder()
                 .provider(x1.getProvider())
+                .model(x1.getModel())
                 .skipSanitize(x1.isSkipSanitize())
                 .enabledSanitizers(x1.getEnabledSanitizers())
                 .idempotencyKey(x1.getIdempotencyKey())

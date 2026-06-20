@@ -1,12 +1,18 @@
 package com.books.framework.llm.sanitizer;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import com.books.framework.utils.HanLPKeywordExtractor;
 
 public class PersonNameSanitizer implements Sanitizer {
 
-    private static final Pattern NAME_PATTERN = Pattern.compile("[\\u4e00-\\u9fa5]{2,4}(?=，|。|！|\\s|$)");
-    private int counter = 0;
+    private final HanLPKeywordExtractor keywordExtractor;
+
+    public PersonNameSanitizer() {
+        this(new HanLPKeywordExtractor());
+    }
+
+    public PersonNameSanitizer(HanLPKeywordExtractor keywordExtractor) {
+        this.keywordExtractor = keywordExtractor;
+    }
 
     @Override
     public String name() {
@@ -20,14 +26,7 @@ public class PersonNameSanitizer implements Sanitizer {
 
     @Override
     public String sanitize(String text) {
-        // 仅处理紧随标点的姓名模式，避免误伤普通词汇
-        StringBuffer sb = new StringBuffer();
-        Matcher m = NAME_PATTERN.matcher(text);
-        while (m.find()) {
-            m.appendReplacement(sb, "个人用户" + (char) ('A' + (counter++ % 26)));
-        }
-        m.appendTail(sb);
-        return sb.toString();
+        return keywordExtractor.maskPersonNames(text);
     }
 
     @Override

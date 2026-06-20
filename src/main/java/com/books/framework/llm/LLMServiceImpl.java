@@ -19,7 +19,10 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.ModelOptionsUtils;
+import org.springframework.ai.openai.OpenAiChatOptions;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -101,13 +104,12 @@ public class LLMServiceImpl implements LLMService {
         }
 
         long start = System.currentTimeMillis();
-        String rawModel = config != null ? config.getDefaultModel() : null;
-        String modelName = rawModel != null ? rawModel.split(",")[0].trim() : null;
+        String modelName = resolveModel(options, prompt, config);
         try {
             List<Message> messages = sanitizedMessages != null ? sanitizedMessages : prompt.getInstructions();
-            Prompt sanitizedPrompt = new Prompt(messages, prompt.getOptions());
+            Prompt callPrompt = buildCallPrompt(messages, prompt, modelName);
 
-            ChatResponse chatResponse = chatClient.prompt(sanitizedPrompt).call().chatResponse();
+            ChatResponse chatResponse = chatClient.prompt(callPrompt).call().chatResponse();
 
             // 响应脱敏
             if (options == null || !options.isSkipSanitize()) {
@@ -131,7 +133,7 @@ public class LLMServiceImpl implements LLMService {
                     BigDecimal cost = calcCost(tokens, config);
                     callLogger.log(LLMCallLogEntry.builder()
                             .provider(provider).modelName(modelName)
-                            .requestPrompt(toPromptLog(messages))
+                            .requestPrompt(toPromptLog(prompt.getInstructions()))
                             .responseText(getContent(chatResponse))
                             .tokensUsed(tokens).cost(cost)
                             .responseTimeMs((int) elapsed).success(true)
@@ -202,6 +204,37 @@ public class LLMServiceImpl implements LLMService {
             if (e.getValue().isEnabled()) return e.getKey();
         }
         return chatClientMap.isEmpty() ? "openai" : chatClientMap.keySet().iterator().next();
+    }
+
+    private String resolveModel(LLMCallOptions options, Prompt prompt, LLMBackendConfig config) {
+        if (options != null && options.getModel() != null && !options.getModel().isEmpty()) {
+            return options.getModel();
+        }
+        if (prompt.getOptions() != null) {
+            String promptModel = prompt.getOptions().getModel();
+            if (promptModel != null && !promptModel.isEmpty()) {
+                return promptModel;
+            }
+        }
+        if (config != null && config.getDefaultModel() != null && !config.getDefaultModel().isEmpty()) {
+            return config.getDefaultModel().split(",")[0].trim();
+        }
+        return null;
+    }
+
+    private Prompt buildCallPrompt(List<Message> messages, Prompt prompt, String model) {
+        OpenAiChatOptions runtimeOptions = null;
+        if (prompt.getOptions() != null) {
+            runtimeOptions = ModelOptionsUtils.copyToTarget(prompt.getOptions(), ChatOptions.class, OpenAiChatOptions.class);
+        }
+        ChatOptions callOptions = runtimeOptions;
+        if (model != null && !model.isEmpty()) {
+            callOptions = ModelOptionsUtils.merge(
+                    OpenAiChatOptions.builder().model(model).build(),
+                    runtimeOptions,
+                    OpenAiChatOptions.class);
+        }
+        return new Prompt(messages, callOptions);
     }
 
     private List<Message> sanitizeMessages(List<Message> messages, LLMCallOptions options) {

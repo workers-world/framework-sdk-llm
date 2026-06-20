@@ -7,6 +7,7 @@ import com.books.framework.llm.log.JdbcLLMCallLogger;
 import com.books.framework.llm.log.LLMCallLogger;
 import com.books.framework.llm.model.LLMBackendConfig;
 import com.books.framework.llm.sanitizer.*;
+import com.books.framework.utils.HanLPKeywordExtractor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
@@ -59,8 +60,16 @@ public class LLMAutoConfiguration {
     // ===== 脱敏器 =====
 
     @Bean
+    @ConditionalOnMissingBean(HanLPKeywordExtractor.class)
+    public HanLPKeywordExtractor hanLPKeywordExtractor() {
+        return new HanLPKeywordExtractor();
+    }
+
+    @Bean
     @ConditionalOnMissingBean(PersonNameSanitizer.class)
-    public PersonNameSanitizer personNameSanitizer() { return new PersonNameSanitizer(); }
+    public PersonNameSanitizer personNameSanitizer(HanLPKeywordExtractor hanLPKeywordExtractor) {
+        return new PersonNameSanitizer(hanLPKeywordExtractor);
+    }
 
     @Bean
     @ConditionalOnMissingBean(PhoneNumberSanitizer.class)

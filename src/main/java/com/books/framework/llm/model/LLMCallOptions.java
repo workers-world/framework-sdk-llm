@@ -10,6 +10,7 @@ import java.util.Map;
 @Builder
 public class LLMCallOptions {
     private String provider;
+    private String model;
     private String idempotencyKey;
     private boolean skipSanitize;
     private List<String> enabledSanitizers;
