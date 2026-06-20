@@ -28,12 +28,12 @@ public class LLMExecuteController {
         this.llmService = llmService;
     }
 
-    @ApiName(name = "llmExecute", input = {LLMExecuteX1.class}, output = {LLMResponseZ1.class}, description = "执行大模型调用")
+    @ApiName(name = "llmExecute",
+            input = {LLMExecuteX1.class},
+            output = {LLMResponseZ1.class},
+            description = "执行大模型调用")
     @PostMapping("/execute")
     public BaseMessage execute(@RequestBody(required = false) BaseMessage request) {
-        if (request == null) {
-            throw new AppException(ErrorCodeEnum.PARAM_ERROR, "请求报文不能为空");
-        }
         LLMExecuteX1 x1 = request.getDto(LLMExecuteX1.class);
         if (x1 == null || x1.getUserMessage() == null || x1.getUserMessage().trim().isEmpty()) {
             throw new AppException(ErrorCodeEnum.PARAM_ERROR, "userMessage 不能为空");
@@ -117,6 +117,10 @@ public class LLMExecuteController {
                 .maxTokens(x1.getMaxTokens() > 0 ? x1.getMaxTokens() : 256)
                 .temperature(x1.getTemperature());
 
+        if (x1.getModel() != null && !x1.getModel().isEmpty()) {
+            optsBuilder.model(x1.getModel());
+        }
+
         if ("JSON_SCHEMA".equals(x1.getResponseFormat()) && x1.getJsonSchema() != null) {
             optsBuilder.responseFormat(ResponseFormat.builder()
                     .type(ResponseFormat.Type.JSON_SCHEMA).jsonSchema(x1.getJsonSchema()).build());
@@ -129,6 +133,7 @@ public class LLMExecuteController {
 
     private LLMCallOptions buildCallOptions(LLMExecuteX1 x1) {
         return LLMCallOptions.builder()
+                .provider(x1.getProvider())
                 .skipSanitize(x1.isSkipSanitize())
                 .enabledSanitizers(x1.getEnabledSanitizers())
                 .idempotencyKey(x1.getIdempotencyKey())

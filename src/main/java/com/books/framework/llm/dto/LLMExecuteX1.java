@@ -12,6 +12,7 @@ public class LLMExecuteX1 {
     private String responseFormat;
     private String jsonSchema;
     private String provider;
+    private String model;
     private boolean skipSanitize;
     private List<String> enabledSanitizers;
     private String idempotencyKey;

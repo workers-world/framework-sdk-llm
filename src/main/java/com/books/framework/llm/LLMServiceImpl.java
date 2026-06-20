@@ -45,16 +45,27 @@ public class LLMServiceImpl implements LLMService {
                           List<Sanitizer> sanitizers,
                           LLMCallLogger callLogger,
                           LLMProperties properties) {
-        this.chatClientMap = chatClientMap;
-        this.configMap = new HashMap<>();
+        this.chatClientMap = new ConcurrentHashMap<>(chatClientMap);
+        this.configMap = new ConcurrentHashMap<>();
         for (LLMBackendConfig c : configs) {
-            this.configMap.put(c.getProvider(), c);
+            if (c.isEnabled()) this.configMap.put(c.getProvider(), c);
         }
         this.sanitizerChain = new SanitizerChain(sanitizers);
         this.callLogger = callLogger;
         this.properties = properties;
         this.rateLimiter = new RateLimiter(properties.getDailyLimit(), properties.getPerMinuteLimit());
         this.circuitBreaker = new CircuitBreaker(5, 60);
+    }
+
+    @Override
+    public void refresh(Map<String, ChatClient> chatClients, List<LLMBackendConfig> configs) {
+        this.chatClientMap.clear();
+        this.chatClientMap.putAll(chatClients);
+        this.configMap.clear();
+        for (LLMBackendConfig c : configs) {
+            if (c.isEnabled()) this.configMap.put(c.getProvider(), c);
+        }
+        log.info("LLM 配置已刷新: {} 个后端, {} 个启用", chatClients.size(), configMap.size());
     }
 
     @Override
@@ -90,7 +101,8 @@ public class LLMServiceImpl implements LLMService {
         }
 
         long start = System.currentTimeMillis();
-        String modelName = config != null ? config.getDefaultModel() : null;
+        String rawModel = config != null ? config.getDefaultModel() : null;
+        String modelName = rawModel != null ? rawModel.split(",")[0].trim() : null;
         try {
             List<Message> messages = sanitizedMessages != null ? sanitizedMessages : prompt.getInstructions();
             Prompt sanitizedPrompt = new Prompt(messages, prompt.getOptions());
@@ -182,6 +194,8 @@ public class LLMServiceImpl implements LLMService {
     }
 
     private String resolveProvider(LLMCallOptions options) {
+        if (options != null && options.getProvider() != null && !options.getProvider().isEmpty())
+            return options.getProvider();
         if (properties.getActiveProvider() != null && !properties.getActiveProvider().isEmpty())
             return properties.getActiveProvider();
         for (Map.Entry<String, LLMBackendConfig> e : configMap.entrySet()) {

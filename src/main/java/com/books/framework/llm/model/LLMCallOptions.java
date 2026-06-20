@@ -9,6 +9,7 @@ import java.util.Map;
 @Data
 @Builder
 public class LLMCallOptions {
+    private String provider;
     private String idempotencyKey;
     private boolean skipSanitize;
     private List<String> enabledSanitizers;

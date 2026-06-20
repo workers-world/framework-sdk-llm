@@ -137,8 +137,12 @@ public class LLMAutoConfiguration {
     @Bean
     @ConditionalOnBean(JdbcTemplate.class)
     @ConditionalOnMissingBean(LLMConfigController.class)
-    public LLMConfigController llmConfigController(JdbcTemplate jdbc) {
-        return new LLMConfigController(jdbc);
+    public LLMConfigController llmConfigController(JdbcTemplate jdbc,
+                                                    LLMService llmService,
+                                                    @org.springframework.beans.factory.annotation.Qualifier("llmChatModels") Map<String, ChatModel> chatModels,
+                                                    @org.springframework.beans.factory.annotation.Qualifier("llmChatClients") Map<String, ChatClient> chatClients,
+                                                    List<ChatModelFactory> factories) {
+        return new LLMConfigController(jdbc, llmService, chatModels, chatClients, factories);
     }
 
     @Bean
@@ -185,10 +189,11 @@ public class LLMAutoConfiguration {
             }
         }
         String apiKey = cfg.getApiKey() != null ? cfg.getApiKey() : "sk-placeholder";
+        String defaultModel = model != null ? model.split(",")[0].trim() : "gpt-4o";
         OpenAiApi api = OpenAiApi.builder().baseUrl(baseUrl).apiKey(apiKey).build();
         return OpenAiChatModel.builder()
                 .openAiApi(api)
-                .defaultOptions(OpenAiChatOptions.builder().model(model).build())
+                .defaultOptions(OpenAiChatOptions.builder().model(defaultModel).build())
                 .build();
     }
 
