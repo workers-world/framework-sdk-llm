@@ -11,6 +11,7 @@ public class LLMBackendConfig {
     private String provider;
     private String endpoint;
     private String apiKey;
+    private String gatewayApiKey;
     private String defaultModel;
     private int timeoutMs;
     private int maxRetries;

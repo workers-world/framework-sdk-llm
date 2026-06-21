@@ -253,11 +253,20 @@ public class LLMAutoConfiguration {
             }
         }
         String apiKey = cfg.getApiKey() != null ? cfg.getApiKey() : "sk-placeholder";
+        String gatewayApiKey = cfg.getGatewayApiKey();
         String defaultModel = model != null ? model.split(",")[0].trim() : "gpt-4o";
+
+        RestClient.Builder restClientBuilder = httpClientSupport.outboundRestClientBuilder();
+        // gateway 模式：用 gatewayApiKey 做 Bearer 认证，原始 apiKey 通过 X-API-Key 传递
+        if (gatewayApiKey != null && !gatewayApiKey.isEmpty()) {
+            restClientBuilder.defaultHeader("X-API-Key", apiKey);
+            apiKey = gatewayApiKey;
+        }
+
         OpenAiApi api = OpenAiApi.builder()
                 .baseUrl(baseUrl)
                 .apiKey(apiKey)
-                .restClientBuilder(httpClientSupport.outboundRestClientBuilder())
+                .restClientBuilder(restClientBuilder)
                 .build();
         return OpenAiChatModel.builder()
                 .openAiApi(api)
@@ -272,6 +281,7 @@ public class LLMAutoConfiguration {
                     provider        VARCHAR(20)  NOT NULL,
                     endpoint        VARCHAR(255),
                     api_key         VARCHAR(512),
+                    gateway_api_key VARCHAR(512),
                     default_model   VARCHAR(128),
                     timeout_ms      INT          DEFAULT 10000,
                     max_retries     INT          DEFAULT 2,
@@ -344,6 +354,7 @@ public class LLMAutoConfiguration {
             cfg.setProvider(rs.getString("provider"));
             cfg.setEndpoint(rs.getString("endpoint"));
             cfg.setApiKey(rs.getString("api_key"));
+            cfg.setGatewayApiKey(rs.getString("gateway_api_key"));
             cfg.setDefaultModel(rs.getString("default_model"));
             cfg.setTimeoutMs(rs.getInt("timeout_ms"));
             cfg.setMaxRetries(rs.getInt("max_retries"));

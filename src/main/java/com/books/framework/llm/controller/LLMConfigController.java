@@ -18,6 +18,7 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.client.RestClient;
 
 import java.math.BigDecimal;
 import java.util.*;
@@ -55,12 +56,13 @@ public class LLMConfigController {
     public BaseMessage list(@RequestBody(required = false) BaseMessage request) {
         try {
             List<Map<String, Object>> list = jdbc.queryForList(
-                    "SELECT id, provider, endpoint, api_key, default_model, timeout_ms, max_retries, " +
+                    "SELECT id, provider, endpoint, api_key, gateway_api_key, default_model, timeout_ms, max_retries, " +
                     "retry_strategy, retry_on_codes, priority, max_concurrency, daily_limit, per_minute_limit, " +
                     "cost_per_1k_input, cost_per_1k_output, is_enabled, tech_create_time, tech_update_time " +
                     "FROM llm_backend_config ORDER BY priority, id");
             for (Map<String, Object> row : list) {
                 row.put("apiKey", maskApiKey((String) row.remove("api_key")));
+                row.put("gatewayApiKey", maskApiKey((String) row.remove("gateway_api_key")));
             }
             BaseMessage response = request.newResponse();
             response.setMessage("查询成功");
@@ -103,11 +105,11 @@ public class LLMConfigController {
         }
 
         jdbc.update(
-                "INSERT INTO llm_backend_config (provider, endpoint, api_key, default_model, " +
+                "INSERT INTO llm_backend_config (provider, endpoint, api_key, gateway_api_key, default_model, " +
                 "timeout_ms, max_retries, retry_strategy, retry_on_codes, priority, max_concurrency, " +
                 "daily_limit, per_minute_limit, cost_per_1k_input, cost_per_1k_output, is_enabled) " +
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                x1.getProvider(), x1.getEndpoint(), x1.getApiKey(), x1.getDefaultModel(),
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                x1.getProvider(), x1.getEndpoint(), x1.getApiKey(), x1.getGatewayApiKey(), x1.getDefaultModel(),
                 x1.getTimeoutMs() != null ? x1.getTimeoutMs() : 10000,
                 x1.getMaxRetries() != null ? x1.getMaxRetries() : 2,
                 x1.getRetryStrategy() != null ? x1.getRetryStrategy() : "FIXED",
@@ -138,11 +140,11 @@ public class LLMConfigController {
         }
         jdbc.update(
                 "UPDATE llm_backend_config SET endpoint=?, api_key=COALESCE(?, api_key), " +
-                "default_model=?, timeout_ms=?, max_retries=?, retry_strategy=?, " +
+                "gateway_api_key=?, default_model=?, timeout_ms=?, max_retries=?, retry_strategy=?, " +
                 "retry_on_codes=?, priority=?, max_concurrency=?, daily_limit=?, per_minute_limit=?, " +
                 "cost_per_1k_input=?, cost_per_1k_output=? " +
                 "WHERE id=?",
-                x1.getEndpoint(), x1.getApiKey(), x1.getDefaultModel(),
+                x1.getEndpoint(), x1.getApiKey(), x1.getGatewayApiKey(), x1.getDefaultModel(),
                 x1.getTimeoutMs(), x1.getMaxRetries(),
                 x1.getRetryStrategy(), x1.getRetryOnCodes(), x1.getPriority(),
                 x1.getMaxConcurrency(), x1.getDailyLimit(), x1.getPerMinuteLimit(),
@@ -193,6 +195,7 @@ public class LLMConfigController {
                         cfg.setProvider(rs.getString("provider"));
                         cfg.setEndpoint(rs.getString("endpoint"));
                         cfg.setApiKey(rs.getString("api_key"));
+                        cfg.setGatewayApiKey(rs.getString("gateway_api_key"));
                         cfg.setDefaultModel(rs.getString("default_model"));
                         cfg.setTimeoutMs(rs.getInt("timeout_ms"));
                         cfg.setMaxRetries(rs.getInt("max_retries"));
@@ -247,11 +250,19 @@ public class LLMConfigController {
             }
         }
         String apiKey = cfg.getApiKey() != null ? cfg.getApiKey() : "sk-placeholder";
+        String gatewayApiKey = cfg.getGatewayApiKey();
         String defaultModel = cfg.getDefaultModel() != null ? cfg.getDefaultModel().split(",")[0].trim() : "gpt-4o";
+
+        RestClient.Builder restClientBuilder = httpClientSupport.outboundRestClientBuilder();
+        if (gatewayApiKey != null && !gatewayApiKey.isEmpty()) {
+            restClientBuilder.defaultHeader("X-API-Key", apiKey);
+            apiKey = gatewayApiKey;
+        }
+
         OpenAiApi api = OpenAiApi.builder()
                 .baseUrl(baseUrl)
                 .apiKey(apiKey)
-                .restClientBuilder(httpClientSupport.outboundRestClientBuilder())
+                .restClientBuilder(restClientBuilder)
                 .build();
         return OpenAiChatModel.builder()
                 .openAiApi(api)

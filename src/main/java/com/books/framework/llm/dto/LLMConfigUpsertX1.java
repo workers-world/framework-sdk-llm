@@ -9,6 +9,7 @@ public class LLMConfigUpsertX1 {
     private String provider;
     private String endpoint;
     private String apiKey;
+    private String gatewayApiKey;
     private String defaultModel;
     private Integer timeoutMs;
     private Integer maxRetries;

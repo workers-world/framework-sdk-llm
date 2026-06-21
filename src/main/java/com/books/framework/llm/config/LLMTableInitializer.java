@@ -27,6 +27,7 @@ public class LLMTableInitializer {
                     provider        VARCHAR(20)  NOT NULL,
                     endpoint        VARCHAR(255),
                     api_key         VARCHAR(512),
+                    gateway_api_key VARCHAR(512),
                     default_model   VARCHAR(128),
                     timeout_ms      INT          DEFAULT 10000,
                     max_retries     INT          DEFAULT 2,
