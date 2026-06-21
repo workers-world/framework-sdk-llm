@@ -10,6 +10,7 @@ import com.books.framework.llm.dto.*;
 import com.books.framework.llm.model.LLMBackendConfig;
 import com.books.framework.message.BaseMessage;
 import com.books.framework.utils.StringUtils;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.chat.model.ChatModel;
@@ -26,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @RestController
 @RequestMapping("/api/llm/configs")
+@Slf4j
 public class LLMConfigController {
 
     private final JdbcTemplate jdbc;
@@ -54,6 +56,7 @@ public class LLMConfigController {
             description = "列出所有后端配置")
     @PostMapping("/list")
     public BaseMessage list(@RequestBody(required = false) BaseMessage request) {
+        BaseMessage response = request != null ? request.newResponse() : BaseMessage.apiSuccess();
         try {
             List<Map<String, Object>> list = jdbc.queryForList(
                     "SELECT id, provider, endpoint, api_key, gateway_api_key, default_model, timeout_ms, max_retries, " +
@@ -61,16 +64,16 @@ public class LLMConfigController {
                     "cost_per_1k_input, cost_per_1k_output, is_enabled, tech_create_time, tech_update_time " +
                     "FROM llm_backend_config ORDER BY priority, id");
             for (Map<String, Object> row : list) {
-                row.put("apiKey", maskApiKey((String) row.remove("api_key")));
-                row.put("gatewayApiKey", maskApiKey((String) row.remove("gateway_api_key")));
+                row.put("apiKey", maskApiKey(str(row.remove("api_key"))));
+                row.put("gatewayApiKey", maskApiKey(str(row.remove("gateway_api_key"))));
             }
-            BaseMessage response = request.newResponse();
             response.setMessage("查询成功");
             response.put("list", list);
             return response;
         } catch (Exception e) {
-            BaseMessage response = request.newResponse();
-            response.setMessage("查询成功");
+            log.warn("查询 llm_backend_config 失败: {}", e.getMessage());
+            response.setCode(ErrorCodeEnum.SYSTEM_ERROR.getCode());
+            response.setMessage("查询失败: " + e.getMessage());
             response.put("list", Collections.emptyList());
             return response;
         }
@@ -243,7 +246,7 @@ public class LLMConfigController {
             switch (provider.toLowerCase()) {
                 case "qwen":   baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1"; break;
                 case "deepseek": baseUrl = "https://api.deepseek.com/v1"; break;
-                case "cloudflare": baseUrl = "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"; break;
+                case "cloudflare": baseUrl = "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai"; break;
                 case "groq":   baseUrl = "https://api.groq.com/openai/v1"; break;
                 case "together": baseUrl = "https://api.together.xyz/v1"; break;
                 default:        baseUrl = "https://api.openai.com/v1";
@@ -280,5 +283,9 @@ public class LLMConfigController {
         }
 
         return key.substring(0, 4) + "****" + key.substring(key.length() - 4);
+    }
+
+    private static String str(Object v) {
+        return v == null ? null : String.valueOf(v);
     }
 }

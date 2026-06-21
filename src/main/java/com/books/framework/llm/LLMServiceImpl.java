@@ -108,11 +108,15 @@ public class LLMServiceImpl implements LLMService {
         List<Message> sanitizedMessages = sanitizeMessages(prompt.getInstructions(), options);
 
         String primaryProvider = resolveProvider(options);
-        List<String> providers = buildFallbackChain(primaryProvider);
+        boolean explicitProvider = options != null
+                && options.getProvider() != null
+                && !options.getProvider().isEmpty();
+        List<String> providers = buildFallbackChain(primaryProvider, !explicitProvider);
 
         long start = System.currentTimeMillis();
         Exception lastException = null;
         String triedProviders = "";
+        List<String> failureDetails = new ArrayList<>();
 
         for (String provider : providers) {
             ChatClient chatClient = chatClientMap.get(provider);
@@ -143,13 +147,19 @@ public class LLMServiceImpl implements LLMService {
             } catch (Exception e) {
                 lastException = e;
                 triedProviders += provider + ",";
-                log.warn("{} 调用失败，尝试故障转移: {}", provider, e.getMessage());
+                failureDetails.add(provider + ": " + e.getMessage());
+                log.warn("{} 调用失败{}: {}", provider, explicitProvider ? "" : "，尝试故障转移", e.getMessage());
                 // rateLimiter.release done in callProvider finally
             }
         }
+        String detail = failureDetails.isEmpty()
+                ? (lastException != null ? lastException.getMessage() : "")
+                : String.join("; ", failureDetails);
+        String errorMessage = "所有后端均失败 [" + triedProviders + "] - " + detail;
+        log.error(errorMessage, lastException);
 
         throw new RuntimeException("所有后端均失败 [" + triedProviders + "] - "
-                + (lastException != null ? lastException.getMessage() : ""), lastException);
+                + detail, lastException);
     }
 
     private ChatResponse callProvider(String provider, ChatClient chatClient, LLMBackendConfig config,
@@ -263,7 +273,7 @@ public class LLMServiceImpl implements LLMService {
                             .build());
                 } catch (Exception ignored) {}
             }
-            throw new RuntimeException("LLM 调用失败: " + provider + " - "
+            throw new RuntimeException("LLM 调用失败: " + provider + " (model=" + modelName + ") - "
                     + (lastException != null ? lastException.getMessage() : ""), lastException);
         } finally {
             rateLimiter.release(provider);
@@ -370,7 +380,11 @@ public class LLMServiceImpl implements LLMService {
         return null;
     }
 
-    private List<String> buildFallbackChain(String primaryProvider) {
+    private List<String> buildFallbackChain(String primaryProvider, boolean allowFallback) {
+        if (!allowFallback) {
+            return primaryProvider != null && !primaryProvider.isEmpty()
+                    ? List.of(primaryProvider) : List.of();
+        }
         // 按 priority 排序所有启用后端，主 provider 放最前
         List<Map.Entry<String, LLMBackendConfig>> sorted = new ArrayList<>(configMap.entrySet());
         sorted.sort((a, b) -> Integer.compare(a.getValue().getPriority(), b.getValue().getPriority()));

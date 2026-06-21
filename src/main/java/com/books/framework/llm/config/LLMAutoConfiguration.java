@@ -22,6 +22,7 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -172,8 +173,9 @@ public class LLMAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(LLMService.class)
-    public LLMServiceImpl llmService(Map<String, ChatClient> chatClients,
-                                      List<LLMBackendConfig> configs,
+    public LLMServiceImpl llmService(
+            @Qualifier("llmChatClients") Map<String, ChatClient> chatClients,
+            @Qualifier("llmBackendConfigs") List<LLMBackendConfig> configs,
                                       List<Sanitizer> sanitizers,
                                       ObjectProvider<LLMCallLogger> callLoggerProvider,
                                       LLMProperties properties,
@@ -246,7 +248,7 @@ public class LLMAutoConfiguration {
             switch (provider.toLowerCase()) {
                 case "qwen":   baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1"; break;
                 case "deepseek": baseUrl = "https://api.deepseek.com/v1"; break;
-                case "cloudflare": baseUrl = "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"; break;
+                case "cloudflare": baseUrl = "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai"; break;
                 case "groq":   baseUrl = "https://api.groq.com/openai/v1"; break;
                 case "together": baseUrl = "https://api.together.xyz/v1"; break;
                 default:        baseUrl = "https://api.openai.com/v1";
