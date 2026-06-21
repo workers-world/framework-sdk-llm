@@ -9,11 +9,13 @@ import java.util.Map;
 public class LLMExecuteX1 {
     private String systemPrompt;
     private String userMessage;
+    private List<String> mediaUrls;
     private String responseFormat;
     private String jsonSchema;
     private String provider;
     private String model;
     private boolean skipSanitize;
+    private List<String> toolNames;
     private List<String> enabledSanitizers;
     private String idempotencyKey;
     private int maxTokens;

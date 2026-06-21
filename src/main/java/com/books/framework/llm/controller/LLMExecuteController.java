@@ -11,11 +11,16 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.content.Media;
+import org.springframework.util.MimeType;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.ResponseFormat;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.Flux;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.*;
 
 @RestController
@@ -75,6 +80,31 @@ public class LLMExecuteController {
         }
     }
 
+    @ApiName(name = "llmExecuteStream", input = {LLMExecuteX1.class}, description = "流式大模型调用(SSE)")
+    @PostMapping(value = "/execute-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<String> executeStream(@RequestBody(required = false) BaseMessage request) {
+        LLMExecuteX1 x1 = request.getDto(LLMExecuteX1.class);
+        if (x1 == null || x1.getUserMessage() == null || x1.getUserMessage().trim().isEmpty()) {
+            return Flux.just("data: {\"error\":\"userMessage 不能为空\"}\n\n");
+        }
+
+        Prompt prompt = buildPrompt(x1);
+        LLMCallOptions opts = buildCallOptions(x1);
+
+        return llmService.executeStream(prompt, opts)
+                .map(chunk -> {
+                    if (chunk.getResults() != null && !chunk.getResults().isEmpty()
+                            && chunk.getResults().get(0).getOutput() != null) {
+                        String text = chunk.getResults().get(0).getOutput().getText();
+                        return "data: " + text + "\n\n";
+                    }
+                    return "";
+                })
+                .filter(s -> !s.isEmpty())
+                .concatWithValues("data: [DONE]\n\n")
+                .timeout(Duration.ofSeconds(300));
+    }
+
     @ApiName(name = "llmExecuteBatch", input = {LLMBatchExecuteX1.class}, description = "批量大模型调用")
     @PostMapping("/execute-batch")
     public BaseMessage executeBatch(@RequestBody(required = false) BaseMessage request) {
@@ -111,7 +141,18 @@ public class LLMExecuteController {
         if (x1.getSystemPrompt() != null && !x1.getSystemPrompt().isEmpty()) {
             msgs.add(new SystemMessage(x1.getSystemPrompt()));
         }
-        msgs.add(new UserMessage(x1.getUserMessage()));
+
+        // 多模态: 如果有 mediaUrls 则构建带 Media 的 UserMessage
+        if (x1.getMediaUrls() != null && !x1.getMediaUrls().isEmpty()
+                && x1.getMediaUrls().stream().anyMatch(u -> u != null && !u.isEmpty())) {
+            List<Media> mediaList = x1.getMediaUrls().stream()
+                    .filter(u -> u != null && !u.isEmpty())
+                    .map(u -> Media.builder().mimeType(new MimeType("image")).data(java.net.URI.create(u)).build())
+                    .toList();
+            msgs.add(UserMessage.builder().text(x1.getUserMessage()).media(mediaList).build());
+        } else {
+            msgs.add(new UserMessage(x1.getUserMessage()));
+        }
 
         OpenAiChatOptions.Builder optsBuilder = OpenAiChatOptions.builder()
                 .maxTokens(x1.getMaxTokens() > 0 ? x1.getMaxTokens() : 256)
@@ -136,6 +177,7 @@ public class LLMExecuteController {
                 .provider(x1.getProvider())
                 .model(x1.getModel())
                 .skipSanitize(x1.isSkipSanitize())
+                .toolNames(x1.getToolNames())
                 .enabledSanitizers(x1.getEnabledSanitizers())
                 .idempotencyKey(x1.getIdempotencyKey())
                 .metadata(x1.getMetadata())

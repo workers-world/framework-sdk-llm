@@ -12,6 +12,7 @@ public class LLMCallOptions {
     private String provider;
     private String model;
     private String idempotencyKey;
+    private List<String> toolNames;
     private boolean skipSanitize;
     private List<String> enabledSanitizers;
     private Map<String, Object> metadata;

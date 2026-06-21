@@ -1,10 +1,14 @@
 package com.books.framework.llm.config;
 
+import com.books.framework.llm.LLMCallInterceptor;
 import com.books.framework.llm.LLMService;
 import com.books.framework.llm.LLMServiceImpl;
+import com.books.framework.llm.cache.LLMResponseCache;
 import com.books.framework.llm.controller.*;
 import com.books.framework.llm.log.JdbcLLMCallLogger;
 import com.books.framework.llm.log.LLMCallLogger;
+import com.books.framework.llm.log.LLMMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
 import com.books.framework.llm.model.LLMBackendConfig;
 import com.books.framework.llm.sanitizer.*;
 import com.books.framework.utils.HanLPKeywordExtractor;
@@ -16,6 +20,7 @@ import org.springframework.ai.ollama.OllamaChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -118,13 +123,17 @@ public class LLMAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(name = "llmChatClients")
     public Map<String, ChatClient> llmChatClients(
-            @org.springframework.beans.factory.annotation.Qualifier("llmChatModels") Map<String, ChatModel> chatModels) {
+            @org.springframework.beans.factory.annotation.Qualifier("llmChatModels") Map<String, ChatModel> chatModels,
+            ObjectProvider<ToolCallback> toolCallbacks) {
+        List<ToolCallback> tools = toolCallbacks.stream().toList();
         Map<String, ChatClient> map = new LinkedHashMap<>();
         for (Map.Entry<String, ChatModel> entry : chatModels.entrySet()) {
-            ChatClient client = ChatClient.builder(entry.getValue())
-                    .defaultAdvisors(new SimpleLoggerAdvisor())
-                    .build();
-            map.put(entry.getKey(), client);
+            ChatClient.Builder builder = ChatClient.builder(entry.getValue())
+                    .defaultAdvisors(new SimpleLoggerAdvisor());
+            if (!tools.isEmpty()) {
+                builder.defaultTools(tools.toArray(new ToolCallback[0]));
+            }
+            map.put(entry.getKey(), builder.build());
         }
         return map;
     }
@@ -143,6 +152,22 @@ public class LLMAutoConfiguration {
     @ConditionalOnMissingBean(LLMCallLogger.class)
     public JdbcLLMCallLogger llmCallLogger(JdbcTemplate jdbc) { return new JdbcLLMCallLogger(jdbc); }
 
+    // ===== 本地缓存 =====
+
+    @Bean
+    @ConditionalOnMissingBean(LLMResponseCache.class)
+    public LLMResponseCache llmResponseCache() {
+        return new LLMResponseCache(1000, 1800); // 1000条 / 30分钟 TTL
+    }
+
+    // ===== 可观测性 =====
+
+    @Bean
+    @ConditionalOnMissingBean(LLMMetrics.class)
+    public LLMMetrics llmMetrics(MeterRegistry meterRegistry) {
+        return new LLMMetrics(meterRegistry);
+    }
+
     // ===== 核心服务 =====
 
     @Bean
@@ -151,9 +176,14 @@ public class LLMAutoConfiguration {
                                       List<LLMBackendConfig> configs,
                                       List<Sanitizer> sanitizers,
                                       ObjectProvider<LLMCallLogger> callLoggerProvider,
-                                      LLMProperties properties) {
+                                      LLMProperties properties,
+                                      ObjectProvider<LLMMetrics> metricsProvider,
+                                      ObjectProvider<LLMCallInterceptor> interceptors,
+                                      ObjectProvider<LLMResponseCache> cacheProvider) {
         LLMCallLogger callLogger = callLoggerProvider.getIfAvailable();
-        return new LLMServiceImpl(chatClients, configs, sanitizers, callLogger, properties);
+        LLMMetrics metrics = metricsProvider.getIfAvailable();
+        LLMResponseCache cache = cacheProvider.getIfAvailable();
+        return new LLMServiceImpl(chatClients, configs, sanitizers, callLogger, properties, metrics, interceptors.stream().toList(), cache);
     }
 
     // ===== Controllers =====
@@ -216,6 +246,9 @@ public class LLMAutoConfiguration {
             switch (provider.toLowerCase()) {
                 case "qwen":   baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1"; break;
                 case "deepseek": baseUrl = "https://api.deepseek.com/v1"; break;
+                case "cloudflare": baseUrl = "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"; break;
+                case "groq":   baseUrl = "https://api.groq.com/openai/v1"; break;
+                case "together": baseUrl = "https://api.together.xyz/v1"; break;
                 default:        baseUrl = "https://api.openai.com/v1";
             }
         }
@@ -239,12 +272,15 @@ public class LLMAutoConfiguration {
                     provider        VARCHAR(20)  NOT NULL,
                     endpoint        VARCHAR(255),
                     api_key         VARCHAR(512),
-                    default_model   VARCHAR(50),
+                    default_model   VARCHAR(128),
                     timeout_ms      INT          DEFAULT 10000,
                     max_retries     INT          DEFAULT 2,
                     retry_strategy  VARCHAR(20)  DEFAULT 'FIXED',
                     retry_on_codes  VARCHAR(100) DEFAULT '429,500,502,503',
+                    priority        INT          DEFAULT 0,
                     max_concurrency INT          DEFAULT 5,
+                    daily_limit     INT          DEFAULT 0,
+                    per_minute_limit INT          DEFAULT 0,
                     cost_per_1k_input  DECIMAL(10,6) DEFAULT 0,
                     cost_per_1k_output DECIMAL(10,6) DEFAULT 0,
                     is_enabled      TINYINT(1)   DEFAULT 1,
@@ -262,10 +298,12 @@ public class LLMAutoConfiguration {
                 CREATE TABLE IF NOT EXISTS llm_call_logs (
                     id              BIGINT PRIMARY KEY AUTO_INCREMENT,
                     provider        VARCHAR(20),
-                    model_name      VARCHAR(50),
+                    model_name      VARCHAR(128),
                     request_prompt  TEXT,
                     response_text   TEXT,
                     parsed_result   TEXT,
+                    input_tokens    INT          DEFAULT 0,
+                    output_tokens   INT          DEFAULT 0,
                     tokens_used     INT,
                     cost            DECIMAL(10,6),
                     response_time_ms INT,
@@ -311,7 +349,10 @@ public class LLMAutoConfiguration {
             cfg.setMaxRetries(rs.getInt("max_retries"));
             cfg.setRetryStrategy(rs.getString("retry_strategy"));
             cfg.setRetryOnCodes(rs.getString("retry_on_codes"));
+            cfg.setPriority(rs.getInt("priority"));
             cfg.setMaxConcurrency(rs.getInt("max_concurrency"));
+            cfg.setDailyLimit(rs.getInt("daily_limit"));
+            cfg.setPerMinuteLimit(rs.getInt("per_minute_limit"));
             BigDecimal inputCost = rs.getBigDecimal("cost_per_1k_input");
             cfg.setCostPer1kInput(inputCost != null ? inputCost : BigDecimal.ZERO);
             BigDecimal outputCost = rs.getBigDecimal("cost_per_1k_output");

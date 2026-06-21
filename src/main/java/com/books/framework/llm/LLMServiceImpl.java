@@ -1,8 +1,10 @@
 package com.books.framework.llm;
 
 import com.books.framework.llm.config.LLMProperties;
+import com.books.framework.llm.cache.LLMResponseCache;
 import com.books.framework.llm.log.LLMCallLogEntry;
 import com.books.framework.llm.log.LLMCallLogger;
+import com.books.framework.llm.log.LLMMetrics;
 import com.books.framework.llm.model.LLMBackendConfig;
 import com.books.framework.llm.model.LLMCallOptions;
 import com.books.framework.llm.rate.CircuitBreaker;
@@ -29,6 +31,8 @@ import java.math.RoundingMode;
 import java.util.*;
 import java.util.concurrent.*;
 
+import reactor.core.publisher.Flux;
+
 @Slf4j
 public class LLMServiceImpl implements LLMService {
 
@@ -39,6 +43,9 @@ public class LLMServiceImpl implements LLMService {
     private final CircuitBreaker circuitBreaker;
     private final LLMCallLogger callLogger;
     private final LLMProperties properties;
+    private final LLMMetrics metrics;
+    private final List<LLMCallInterceptor> interceptors;
+    private final LLMResponseCache cache;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ExecutorService asyncExecutor = Executors.newFixedThreadPool(4);
     private final Map<String, Future<ChatResponse>> asyncTasks = new ConcurrentHashMap<>();
@@ -47,7 +54,10 @@ public class LLMServiceImpl implements LLMService {
                           List<LLMBackendConfig> configs,
                           List<Sanitizer> sanitizers,
                           LLMCallLogger callLogger,
-                          LLMProperties properties) {
+                          LLMProperties properties,
+                          LLMMetrics metrics,
+                          List<LLMCallInterceptor> interceptors,
+                          LLMResponseCache cache) {
         this.chatClientMap = new ConcurrentHashMap<>(chatClientMap);
         this.configMap = new ConcurrentHashMap<>();
         for (LLMBackendConfig c : configs) {
@@ -56,6 +66,9 @@ public class LLMServiceImpl implements LLMService {
         this.sanitizerChain = new SanitizerChain(sanitizers);
         this.callLogger = callLogger;
         this.properties = properties;
+        this.metrics = metrics;
+        this.interceptors = interceptors != null ? interceptors.stream().sorted((a, b) -> Integer.compare(a.getOrder(), b.getOrder())).toList() : List.of();
+        this.cache = cache;
         this.rateLimiter = new RateLimiter(properties.getDailyLimit(), properties.getPerMinuteLimit());
         this.circuitBreaker = new CircuitBreaker(5, 60);
     }
@@ -82,20 +95,200 @@ public class LLMServiceImpl implements LLMService {
             }
         }
 
+        // 本地缓存检查
+        if (cache != null && (options == null || options.getIdempotencyKey() == null || options.getIdempotencyKey().isEmpty())) {
+            String cacheProvider = resolveProvider(options);
+            String cacheModel = resolveModel(options, prompt, configMap.get(cacheProvider));
+            String promptText = toPromptLog(prompt.getInstructions());
+            ChatResponse cached = cache.get(cacheProvider, cacheModel, promptText);
+            if (cached != null) return cached;
+        }
+
+        // 脱敏（只做一次）
+        List<Message> sanitizedMessages = sanitizeMessages(prompt.getInstructions(), options);
+
+        String primaryProvider = resolveProvider(options);
+        List<String> providers = buildFallbackChain(primaryProvider);
+
+        long start = System.currentTimeMillis();
+        Exception lastException = null;
+        String triedProviders = "";
+
+        for (String provider : providers) {
+            ChatClient chatClient = chatClientMap.get(provider);
+            if (chatClient == null) {
+                log.warn("后端不存在，跳过: {}", provider);
+                continue;
+            }
+            LLMBackendConfig config = configMap.get(provider);
+
+            // 限流 + 熔断
+            int maxConcurrency = config != null ? config.getMaxConcurrency() : 5;
+            int pDailyLimit = config != null ? config.getDailyLimit() : 0;
+            int pPerMinuteLimit = config != null ? config.getPerMinuteLimit() : 0;
+            if (!rateLimiter.tryAcquire(provider, maxConcurrency, pDailyLimit, pPerMinuteLimit)) {
+                log.warn("{} 限流，尝试故障转移", provider);
+                continue;
+            }
+            if (!circuitBreaker.allowsRequest(provider)) {
+                rateLimiter.release(provider);
+                log.warn("{} 熔断中，尝试故障转移", provider);
+                continue;
+            }
+
+            try {
+                ChatResponse result = callProvider(provider, chatClient, config, prompt, options,
+                        sanitizedMessages, idempotencyKey, start);
+                return result;
+            } catch (Exception e) {
+                lastException = e;
+                triedProviders += provider + ",";
+                log.warn("{} 调用失败，尝试故障转移: {}", provider, e.getMessage());
+                // rateLimiter.release done in callProvider finally
+            }
+        }
+
+        throw new RuntimeException("所有后端均失败 [" + triedProviders + "] - "
+                + (lastException != null ? lastException.getMessage() : ""), lastException);
+    }
+
+    private ChatResponse callProvider(String provider, ChatClient chatClient, LLMBackendConfig config,
+                                       Prompt prompt, LLMCallOptions options, List<Message> sanitizedMessages,
+                                       String idempotencyKey, long start) {
+        String modelName = resolveModel(options, prompt, config);
+        int maxRetries = config != null ? config.getMaxRetries() : 0;
+        String retryStrategy = config != null ? config.getRetryStrategy() : "FIXED";
+        String retryOnCodes = config != null ? config.getRetryOnCodes() : "";
+        Exception lastException = null;
+
+        try {
+            for (int attempt = 0; attempt <= maxRetries; attempt++) {
+                try {
+                    List<Message> messages = sanitizedMessages != null ? sanitizedMessages : prompt.getInstructions();
+                    Prompt callPrompt = buildCallPrompt(messages, prompt, modelName);
+
+                    ChatClient.ChatClientRequestSpec spec = chatClient.prompt(callPrompt);
+                    if (options != null && options.getToolNames() != null && !options.getToolNames().isEmpty()) {
+                        spec = spec.toolNames(options.getToolNames().toArray(new String[0]));
+                    }
+
+                    // 拦截器 beforeCall
+                    ChatResponse intercepted = null;
+                    for (LLMCallInterceptor interceptor : interceptors) {
+                        intercepted = interceptor.beforeCall(prompt, options);
+                        if (intercepted != null) return intercepted;
+                    }
+
+                    ChatResponse chatResponse = spec.call().chatResponse();
+
+                    // 拦截器 afterCall
+                    long afterElapsed = System.currentTimeMillis() - start;
+                    for (LLMCallInterceptor interceptor : interceptors) {
+                        chatResponse = interceptor.afterCall(prompt, options, chatResponse, afterElapsed);
+                    }
+
+                    // 响应脱敏
+                    if (options == null || !options.isSkipSanitize()) {
+                        chatResponse = sanitizeResponse(chatResponse, options);
+                    }
+
+                    long elapsed = System.currentTimeMillis() - start;
+                    int tokens = 0;
+                    int inputTokens = 0;
+                    int outputTokens = 0;
+                    if (chatResponse.getMetadata() != null && chatResponse.getMetadata().getUsage() != null) {
+                        var usage = chatResponse.getMetadata().getUsage();
+                        tokens = (int) usage.getTotalTokens();
+                        inputTokens = (int) usage.getPromptTokens();
+                        outputTokens = (int) usage.getCompletionTokens();
+                    }
+                    if (chatResponse.getMetadata() != null && chatResponse.getMetadata().getModel() != null) {
+                        modelName = chatResponse.getMetadata().getModel();
+                    }
+
+                    circuitBreaker.recordSuccess(provider);
+                    if (metrics != null) metrics.recordSuccess(provider, modelName, elapsed, inputTokens, outputTokens);
+                    if (cache != null && (options == null || options.getIdempotencyKey() == null || options.getIdempotencyKey().isEmpty())) {
+                        cache.put(provider, modelName, toPromptLog(prompt.getInstructions()), chatResponse);
+                    }
+
+                    // DB 审计日志
+                    if (callLogger != null) {
+                        try {
+                            BigDecimal cost = calcCost(inputTokens, outputTokens, config);
+                            callLogger.log(LLMCallLogEntry.builder()
+                                    .provider(provider).modelName(modelName)
+                                    .requestPrompt(toPromptLog(prompt.getInstructions()))
+                                    .responseText(getContent(chatResponse))
+                                    .inputTokens(inputTokens).outputTokens(outputTokens)
+                                    .tokensUsed(tokens).cost(cost)
+                                    .responseTimeMs((int) elapsed).success(true)
+                                    .idempotencyKey(idempotencyKey)
+                                    .metadataJson(toJson(options != null ? options.getMetadata() : null))
+                                    .build());
+                        } catch (Exception e) {
+                            log.error("LLM 日志写入失败", e);
+                        }
+                    }
+
+                    return chatResponse;
+                } catch (Exception e) {
+                    lastException = e;
+                    if (attempt < maxRetries && isRetryable(e, retryOnCodes)) {
+                        long delay = calcRetryDelay(attempt, retryStrategy);
+                        log.warn("LLM 重试 {}/{} provider={} delay={}ms: {}",
+                                attempt + 1, maxRetries, provider, delay, e.getMessage());
+                        try { Thread.sleep(delay); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                        continue;
+                    }
+                    break;
+                }
+            }
+
+            // 所有重试已用尽
+            long elapsed = System.currentTimeMillis() - start;
+            for (LLMCallInterceptor interceptor : interceptors) {
+                interceptor.onError(prompt, options, lastException);
+            }
+            circuitBreaker.recordFailure(provider);
+            if (metrics != null) metrics.recordFailure(provider, modelName);
+            if (callLogger != null) {
+                try {
+                    callLogger.log(LLMCallLogEntry.builder()
+                            .provider(provider).modelName(modelName)
+                            .requestPrompt(toPromptLog(prompt.getInstructions()))
+                            .success(false).errorMessage(lastException != null ? lastException.getMessage() : null)
+                            .responseTimeMs((int) elapsed)
+                            .idempotencyKey(idempotencyKey)
+                            .build());
+                } catch (Exception ignored) {}
+            }
+            throw new RuntimeException("LLM 调用失败: " + provider + " - "
+                    + (lastException != null ? lastException.getMessage() : ""), lastException);
+        } finally {
+            rateLimiter.release(provider);
+        }
+    }
+
+    @Override
+    public Flux<ChatResponse> executeStream(Prompt prompt, LLMCallOptions options) {
         String provider = resolveProvider(options);
         ChatClient chatClient = chatClientMap.get(provider);
         if (chatClient == null) {
-            log.error("未找到后端: {}" + provider);
+            log.error("未找到后端: {}", provider);
             throw new RuntimeException("未找到后端: " + provider);
         }
         LLMBackendConfig config = configMap.get(provider);
 
-        // 脱敏
+        // 脱敏输入
         List<Message> sanitizedMessages = sanitizeMessages(prompt.getInstructions(), options);
+        List<Message> messages = sanitizedMessages != null ? sanitizedMessages : prompt.getInstructions();
 
         // 限流 + 熔断
         int maxConcurrency = config != null ? config.getMaxConcurrency() : 5;
-        if (!rateLimiter.tryAcquire(provider, maxConcurrency)) {
+        int pDailyLimit = config != null ? config.getDailyLimit() : 0;
+        int pPerMinuteLimit = config != null ? config.getPerMinuteLimit() : 0;
+        if (!rateLimiter.tryAcquire(provider, maxConcurrency, pDailyLimit, pPerMinuteLimit)) {
             throw new RuntimeException("调用频率限制: " + provider);
         }
         if (!circuitBreaker.allowsRequest(provider)) {
@@ -103,67 +296,45 @@ public class LLMServiceImpl implements LLMService {
             throw new RuntimeException("后端已熔断: " + provider);
         }
 
-        long start = System.currentTimeMillis();
         String modelName = resolveModel(options, prompt, config);
-        try {
-            List<Message> messages = sanitizedMessages != null ? sanitizedMessages : prompt.getInstructions();
-            Prompt callPrompt = buildCallPrompt(messages, prompt, modelName);
+        Prompt callPrompt = buildCallPrompt(messages, prompt, modelName);
+        long start = System.currentTimeMillis();
+        String idempotencyKey = options != null ? options.getIdempotencyKey() : null;
 
-            ChatResponse chatResponse = chatClient.prompt(callPrompt).call().chatResponse();
-
-            // 响应脱敏
-            if (options == null || !options.isSkipSanitize()) {
-                chatResponse = sanitizeResponse(chatResponse, options);
-            }
-
-            long elapsed = System.currentTimeMillis() - start;
-            int tokens = 0;
-            if (chatResponse.getMetadata() != null && chatResponse.getMetadata().getUsage() != null) {
-                tokens = (int) chatResponse.getMetadata().getUsage().getTotalTokens();
-            }
-            if (chatResponse.getMetadata() != null && chatResponse.getMetadata().getModel() != null) {
-                modelName = chatResponse.getMetadata().getModel();
-            }
-
-            circuitBreaker.recordSuccess(provider);
-
-            // DB 审计日志
-            if (callLogger != null) {
-                try {
-                    BigDecimal cost = calcCost(tokens, config);
-                    callLogger.log(LLMCallLogEntry.builder()
-                            .provider(provider).modelName(modelName)
-                            .requestPrompt(toPromptLog(prompt.getInstructions()))
-                            .responseText(getContent(chatResponse))
-                            .tokensUsed(tokens).cost(cost)
-                            .responseTimeMs((int) elapsed).success(true)
-                            .idempotencyKey(idempotencyKey)
-                            .metadataJson(toJson(options != null ? options.getMetadata() : null))
-                            .build());
-                } catch (Exception e) {
-                    log.error("LLM 日志写入失败", e);
-                }
-            }
-
-            return chatResponse;
-        } catch (Exception e) {
-            long elapsed = System.currentTimeMillis() - start;
-            circuitBreaker.recordFailure(provider);
-            if (callLogger != null) {
-                try {
-                    callLogger.log(LLMCallLogEntry.builder()
-                            .provider(provider).modelName(modelName)
-                            .requestPrompt(toPromptLog(prompt.getInstructions()))
-                            .success(false).errorMessage(e.getMessage())
-                            .responseTimeMs((int) elapsed)
-                            .idempotencyKey(idempotencyKey)
-                            .build());
-                } catch (Exception ignored) {}
-            }
-            throw new RuntimeException("LLM 调用失败: " + provider + " - " + e.getMessage(), e);
-        } finally {
-            rateLimiter.release(provider);
+        ChatClient.ChatClientRequestSpec streamSpec = chatClient.prompt(callPrompt);
+        if (options != null && options.getToolNames() != null && !options.getToolNames().isEmpty()) {
+            streamSpec = streamSpec.toolNames(options.getToolNames().toArray(new String[0]));
         }
+        return streamSpec.stream().chatResponse()
+                .map(chunk -> {
+                    if (options == null || !options.isSkipSanitize()) {
+                        return sanitizeResponse(chunk, options);
+                    }
+                    return chunk;
+                })
+                .doOnComplete(() -> {
+                    rateLimiter.release(provider);
+                    circuitBreaker.recordSuccess(provider);
+                    long elapsed = System.currentTimeMillis() - start;
+                    log.info("LLM 流式调用完成: provider={}, model={}, elapsed={}ms", provider, modelName, elapsed);
+                })
+                .doOnError(e -> {
+                    rateLimiter.release(provider);
+                    circuitBreaker.recordFailure(provider);
+                    long elapsed = System.currentTimeMillis() - start;
+                    log.error("LLM 流式调用失败: provider={}, elapsed={}ms, error={}", provider, elapsed, e.getMessage());
+                    if (callLogger != null) {
+                        try {
+                            callLogger.log(LLMCallLogEntry.builder()
+                                    .provider(provider).modelName(modelName)
+                                    .requestPrompt(toPromptLog(prompt.getInstructions()))
+                                    .success(false).errorMessage(e.getMessage())
+                                    .responseTimeMs((int) elapsed)
+                                    .idempotencyKey(idempotencyKey)
+                                    .build());
+                        } catch (Exception ignored) {}
+                    }
+                });
     }
 
     @Override
@@ -176,9 +347,13 @@ public class LLMServiceImpl implements LLMService {
 
     @Override
     public List<ChatResponse> executeBatch(List<Prompt> prompts, LLMCallOptions options) {
-        List<ChatResponse> responses = new ArrayList<>(prompts.size());
+        List<CompletableFuture<ChatResponse>> futures = new ArrayList<>(prompts.size());
         for (Prompt p : prompts) {
-            responses.add(execute(p, options));
+            futures.add(CompletableFuture.supplyAsync(() -> execute(p, options), asyncExecutor));
+        }
+        List<ChatResponse> responses = new ArrayList<>(prompts.size());
+        for (CompletableFuture<ChatResponse> f : futures) {
+            responses.add(f.join());
         }
         return responses;
     }
@@ -193,6 +368,25 @@ public class LLMServiceImpl implements LLMService {
             }
         }
         return null;
+    }
+
+    private List<String> buildFallbackChain(String primaryProvider) {
+        // 按 priority 排序所有启用后端，主 provider 放最前
+        List<Map.Entry<String, LLMBackendConfig>> sorted = new ArrayList<>(configMap.entrySet());
+        sorted.sort((a, b) -> Integer.compare(a.getValue().getPriority(), b.getValue().getPriority()));
+
+        List<String> result = new ArrayList<>();
+        // 先把主 provider 放第一个
+        if (primaryProvider != null && configMap.containsKey(primaryProvider)) {
+            result.add(primaryProvider);
+        }
+        // 然后按 priority 追加其他 enable 的 provider
+        for (Map.Entry<String, LLMBackendConfig> e : sorted) {
+            if (!e.getKey().equals(primaryProvider) && e.getValue().isEnabled()) {
+                result.add(e.getKey());
+            }
+        }
+        return result;
     }
 
     private String resolveProvider(LLMCallOptions options) {
@@ -310,10 +504,39 @@ public class LLMServiceImpl implements LLMService {
         try { return objectMapper.writeValueAsString(obj); } catch (JsonProcessingException e) { return null; }
     }
 
-    private BigDecimal calcCost(int tokens, LLMBackendConfig config) {
-        if (config == null || config.getCostPer1kOutput() == null) return BigDecimal.ZERO;
-        return config.getCostPer1kOutput()
-                .multiply(BigDecimal.valueOf(tokens))
-                .divide(BigDecimal.valueOf(1000), 6, RoundingMode.HALF_UP);
+    private boolean isRetryable(Exception e, String retryOnCodes) {
+        if (retryOnCodes == null || retryOnCodes.isEmpty()) return false;
+        String[] codes = retryOnCodes.split(",");
+        String msg = e.getMessage();
+        if (msg == null) return false;
+        for (String code : codes) {
+            if (msg.contains(code.trim())) return true;
+        }
+        return false;
+    }
+
+    private long calcRetryDelay(int attempt, String strategy) {
+        long base = 1000L;
+        if ("EXPONENTIAL".equalsIgnoreCase(strategy)) {
+            return base * (1L << attempt); // 1s, 2s, 4s, 8s...
+        }
+        return base; // FIXED: constant 1s
+    }
+
+    private BigDecimal calcCost(int inputTokens, int outputTokens, LLMBackendConfig config) {
+        if (config == null) return BigDecimal.ZERO;
+        BigDecimal inputCost = BigDecimal.ZERO;
+        BigDecimal outputCost = BigDecimal.ZERO;
+        if (config.getCostPer1kInput() != null) {
+            inputCost = config.getCostPer1kInput()
+                    .multiply(BigDecimal.valueOf(inputTokens))
+                    .divide(BigDecimal.valueOf(1000), 6, RoundingMode.HALF_UP);
+        }
+        if (config.getCostPer1kOutput() != null) {
+            outputCost = config.getCostPer1kOutput()
+                    .multiply(BigDecimal.valueOf(outputTokens))
+                    .divide(BigDecimal.valueOf(1000), 6, RoundingMode.HALF_UP);
+        }
+        return inputCost.add(outputCost);
     }
 }

@@ -56,8 +56,9 @@ public class LLMConfigController {
         try {
             List<Map<String, Object>> list = jdbc.queryForList(
                     "SELECT id, provider, endpoint, api_key, default_model, timeout_ms, max_retries, " +
-                    "retry_strategy, max_concurrency, is_enabled, tech_create_time, tech_update_time " +
-                    "FROM llm_backend_config ORDER BY id");
+                    "retry_strategy, retry_on_codes, priority, max_concurrency, daily_limit, per_minute_limit, " +
+                    "cost_per_1k_input, cost_per_1k_output, is_enabled, tech_create_time, tech_update_time " +
+                    "FROM llm_backend_config ORDER BY priority, id");
             for (Map<String, Object> row : list) {
                 row.put("apiKey", maskApiKey((String) row.remove("api_key")));
             }
@@ -107,15 +108,18 @@ public class LLMConfigController {
         }
         jdbc.update(
                 "INSERT INTO llm_backend_config (provider, endpoint, api_key, default_model, " +
-                "timeout_ms, max_retries, retry_strategy, retry_on_codes, max_concurrency, " +
-                "cost_per_1k_input, cost_per_1k_output, is_enabled) " +
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "timeout_ms, max_retries, retry_strategy, retry_on_codes, priority, max_concurrency, " +
+                "daily_limit, per_minute_limit, cost_per_1k_input, cost_per_1k_output, is_enabled) " +
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 x1.getProvider(), x1.getEndpoint(), x1.getApiKey(), x1.getDefaultModel(),
                 x1.getTimeoutMs() != null ? x1.getTimeoutMs() : 10000,
                 x1.getMaxRetries() != null ? x1.getMaxRetries() : 2,
                 x1.getRetryStrategy() != null ? x1.getRetryStrategy() : "FIXED",
                 x1.getRetryOnCodes() != null ? x1.getRetryOnCodes() : "429,500,502,503",
+                x1.getPriority() != null ? x1.getPriority() : 0,
                 x1.getMaxConcurrency() != null ? x1.getMaxConcurrency() : 5,
+                x1.getDailyLimit() != null ? x1.getDailyLimit() : 0,
+                x1.getPerMinuteLimit() != null ? x1.getPerMinuteLimit() : 0,
                 x1.getCostPer1kInput() != null ? x1.getCostPer1kInput() : BigDecimal.ZERO,
                 x1.getCostPer1kOutput() != null ? x1.getCostPer1kOutput() : BigDecimal.ZERO,
                 1);
@@ -142,11 +146,13 @@ public class LLMConfigController {
         jdbc.update(
                 "UPDATE llm_backend_config SET endpoint=?, api_key=COALESCE(?, api_key), " +
                 "default_model=?, timeout_ms=?, max_retries=?, retry_strategy=?, " +
-                "retry_on_codes=?, max_concurrency=?, cost_per_1k_input=?, cost_per_1k_output=? " +
+                "retry_on_codes=?, priority=?, max_concurrency=?, daily_limit=?, per_minute_limit=?, " +
+                "cost_per_1k_input=?, cost_per_1k_output=? " +
                 "WHERE id=?",
                 x1.getEndpoint(), x1.getApiKey(), x1.getDefaultModel(),
                 x1.getTimeoutMs(), x1.getMaxRetries(),
-                x1.getRetryStrategy(), x1.getRetryOnCodes(), x1.getMaxConcurrency(),
+                x1.getRetryStrategy(), x1.getRetryOnCodes(), x1.getPriority(),
+                x1.getMaxConcurrency(), x1.getDailyLimit(), x1.getPerMinuteLimit(),
                 x1.getCostPer1kInput(), x1.getCostPer1kOutput(), idX1.getId());
         refreshBackends();
         BaseMessage response = request.newResponse();
@@ -196,10 +202,23 @@ public class LLMConfigController {
                     "SELECT * FROM llm_backend_config WHERE is_enabled = 1",
                     (rs, rowNum) -> {
                         LLMBackendConfig cfg = new LLMBackendConfig();
+                        cfg.setId(rs.getLong("id"));
                         cfg.setProvider(rs.getString("provider"));
                         cfg.setEndpoint(rs.getString("endpoint"));
                         cfg.setApiKey(rs.getString("api_key"));
                         cfg.setDefaultModel(rs.getString("default_model"));
+                        cfg.setTimeoutMs(rs.getInt("timeout_ms"));
+                        cfg.setMaxRetries(rs.getInt("max_retries"));
+                        cfg.setRetryStrategy(rs.getString("retry_strategy"));
+                        cfg.setRetryOnCodes(rs.getString("retry_on_codes"));
+                        cfg.setPriority(rs.getInt("priority"));
+                        cfg.setMaxConcurrency(rs.getInt("max_concurrency"));
+                        cfg.setDailyLimit(rs.getInt("daily_limit"));
+                        cfg.setPerMinuteLimit(rs.getInt("per_minute_limit"));
+                        BigDecimal inputCost = rs.getBigDecimal("cost_per_1k_input");
+                        cfg.setCostPer1kInput(inputCost != null ? inputCost : BigDecimal.ZERO);
+                        BigDecimal outputCost = rs.getBigDecimal("cost_per_1k_output");
+                        cfg.setCostPer1kOutput(outputCost != null ? outputCost : BigDecimal.ZERO);
                         cfg.setEnabled(true);
                         return cfg;
                     });
@@ -234,6 +253,9 @@ public class LLMConfigController {
             switch (provider.toLowerCase()) {
                 case "qwen":   baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1"; break;
                 case "deepseek": baseUrl = "https://api.deepseek.com/v1"; break;
+                case "cloudflare": baseUrl = "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"; break;
+                case "groq":   baseUrl = "https://api.groq.com/openai/v1"; break;
+                case "together": baseUrl = "https://api.together.xyz/v1"; break;
                 default:        baseUrl = "https://api.openai.com/v1";
             }
         }

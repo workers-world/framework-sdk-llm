@@ -30,11 +30,13 @@ public class JdbcLLMCallLogger implements LLMCallLogger {
         String now = TECH_FMT.format(LocalDateTime.now());
         jdbcTemplate.update(
                 "INSERT INTO llm_call_logs (provider, model_name, request_prompt, response_text, " +
-                "parsed_result, tokens_used, cost, response_time_ms, success, error_message, " +
-                "caller_info, idempotency_key, metadata_json, tech_create_time, tech_update_time) " +
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "parsed_result, input_tokens, output_tokens, tokens_used, cost, response_time_ms, " +
+                "success, error_message, caller_info, idempotency_key, metadata_json, " +
+                "tech_create_time, tech_update_time) " +
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 entry.getProvider(), entry.getModelName(), entry.getRequestPrompt(), entry.getResponseText(),
-                entry.getParsedResult(), entry.getTokensUsed(), entry.getCost(), entry.getResponseTimeMs(),
+                entry.getParsedResult(), entry.getInputTokens(), entry.getOutputTokens(),
+                entry.getTokensUsed(), entry.getCost(), entry.getResponseTimeMs(),
                 entry.isSuccess() ? 1 : 0, entry.getErrorMessage(),
                 entry.getCallerInfo(), entry.getIdempotencyKey(), entry.getMetadataJson(),
                 now, now);
@@ -138,6 +140,8 @@ public class JdbcLLMCallLogger implements LLMCallLogger {
                     .requestPrompt(rs.getString("request_prompt"))
                     .responseText(rs.getString("response_text"))
                     .parsedResult(rs.getString("parsed_result"))
+                    .inputTokens(rs.getInt("input_tokens"))
+                    .outputTokens(rs.getInt("output_tokens"))
                     .tokensUsed(rs.getInt("tokens_used"))
                     .cost(rs.getBigDecimal("cost"))
                     .responseTimeMs(rs.getInt("response_time_ms"))

@@ -16,7 +16,10 @@ public class LLMBackendConfig {
     private int maxRetries;
     private String retryStrategy;
     private String retryOnCodes;
+    private int priority;
     private int maxConcurrency;
+    private int dailyLimit;
+    private int perMinuteLimit;
     private BigDecimal costPer1kInput;
     private BigDecimal costPer1kOutput;
     private boolean enabled;

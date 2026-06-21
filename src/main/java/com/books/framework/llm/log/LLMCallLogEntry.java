@@ -15,6 +15,8 @@ public class LLMCallLogEntry {
     private String requestPrompt;
     private String responseText;
     private String parsedResult;
+    private int inputTokens;
+    private int outputTokens;
     private int tokensUsed;
     private BigDecimal cost;
     private int responseTimeMs;

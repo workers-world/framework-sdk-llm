@@ -14,7 +14,10 @@ public class LLMConfigUpsertX1 {
     private Integer maxRetries;
     private String retryStrategy;
     private String retryOnCodes;
+    private Integer priority;
     private Integer maxConcurrency;
+    private Integer dailyLimit;
+    private Integer perMinuteLimit;
     private BigDecimal costPer1kInput;
     private BigDecimal costPer1kOutput;
 }
