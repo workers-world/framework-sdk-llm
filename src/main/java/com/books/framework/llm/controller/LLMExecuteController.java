@@ -105,12 +105,11 @@ public class LLMExecuteController {
                 .timeout(Duration.ofSeconds(300));
     }
 
-    @ApiName(name = "llmExecuteBatch", input = {LLMBatchExecuteX1.class}, description = "批量大模型调用")
+    @ApiName(name = "llmExecuteBatch",
+            input = {LLMBatchExecuteX1.class},
+            description = "批量大模型调用")
     @PostMapping("/execute-batch")
     public BaseMessage executeBatch(@RequestBody(required = false) BaseMessage request) {
-        if (request == null) {
-            throw new AppException(ErrorCodeEnum.PARAM_ERROR, "请求报文不能为空");
-        }
         LLMBatchExecuteX1 x1 = request.getDto(LLMBatchExecuteX1.class);
         if (x1 == null || x1.getRequests() == null || x1.getRequests().isEmpty()) {
             throw new AppException(ErrorCodeEnum.PARAM_ERROR, "requests 不能为空");

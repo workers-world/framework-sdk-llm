@@ -9,6 +9,7 @@ import com.books.framework.llm.config.LlmHttpClientSupport;
 import com.books.framework.llm.dto.*;
 import com.books.framework.llm.model.LLMBackendConfig;
 import com.books.framework.message.BaseMessage;
+import com.books.framework.utils.StringUtils;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.chat.model.ChatModel;
@@ -47,12 +48,11 @@ public class LLMConfigController {
         this.httpClientSupport = httpClientSupport;
     }
 
-    @ApiName(name = "llmListConfigs", output = {Map.class}, description = "列出所有后端配置")
+    @ApiName(name = "llmListConfigs",
+            output = {Map.class},
+            description = "列出所有后端配置")
     @PostMapping("/list")
     public BaseMessage list(@RequestBody(required = false) BaseMessage request) {
-        if (request == null) {
-            throw new AppException(ErrorCodeEnum.PARAM_ERROR, "请求报文不能为空");
-        }
         try {
             List<Map<String, Object>> list = jdbc.queryForList(
                     "SELECT id, provider, endpoint, api_key, default_model, timeout_ms, max_retries, " +
@@ -77,13 +77,11 @@ public class LLMConfigController {
     @ApiName(name = "llmGetConfig", input = {LLMConfigIdX1.class}, description = "查询后端配置详情")
     @PostMapping("/get")
     public BaseMessage getById(@RequestBody(required = false) BaseMessage request) {
-        if (request == null) {
-            throw new AppException(ErrorCodeEnum.PARAM_ERROR, "请求报文不能为空");
-        }
         LLMConfigIdX1 x1 = request.getDto(LLMConfigIdX1.class);
         if (x1 == null || x1.getId() == null) {
             throw new AppException(ErrorCodeEnum.PARAM_ERROR, "id 不能为空");
         }
+
         try {
             Map<String, Object> row = jdbc.queryForMap("SELECT * FROM llm_backend_config WHERE id = ?", x1.getId());
             row.put("api_key", "****");
@@ -99,13 +97,11 @@ public class LLMConfigController {
     @ApiName(name = "llmCreateConfig", input = {LLMConfigUpsertX1.class}, description = "新增后端配置")
     @PostMapping("/create")
     public BaseMessage create(@RequestBody(required = false) BaseMessage request) {
-        if (request == null) {
-            throw new AppException(ErrorCodeEnum.PARAM_ERROR, "请求报文不能为空");
-        }
         LLMConfigUpsertX1 x1 = request.getDto(LLMConfigUpsertX1.class);
         if (x1 == null || x1.getProvider() == null) {
             throw new AppException(ErrorCodeEnum.PARAM_ERROR, "provider 不能为空");
         }
+
         jdbc.update(
                 "INSERT INTO llm_backend_config (provider, endpoint, api_key, default_model, " +
                 "timeout_ms, max_retries, retry_strategy, retry_on_codes, priority, max_concurrency, " +
@@ -132,9 +128,6 @@ public class LLMConfigController {
     @ApiName(name = "llmUpdateConfig", input = {LLMConfigUpsertX1.class, LLMConfigIdX1.class}, description = "编辑后端配置")
     @PostMapping("/update")
     public BaseMessage update(@RequestBody(required = false) BaseMessage request) {
-        if (request == null) {
-            throw new AppException(ErrorCodeEnum.PARAM_ERROR, "请求报文不能为空");
-        }
         LLMConfigIdX1 idX1 = request.getDto(LLMConfigIdX1.class);
         if (idX1 == null || idX1.getId() == null) {
             throw new AppException(ErrorCodeEnum.PARAM_ERROR, "id 不能为空");
@@ -163,9 +156,6 @@ public class LLMConfigController {
     @ApiName(name = "llmDeleteConfig", input = {LLMConfigIdX1.class}, description = "删除后端配置")
     @PostMapping("/delete")
     public BaseMessage delete(@RequestBody(required = false) BaseMessage request) {
-        if (request == null) {
-            throw new AppException(ErrorCodeEnum.PARAM_ERROR, "请求报文不能为空");
-        }
         LLMConfigIdX1 x1 = request.getDto(LLMConfigIdX1.class);
         if (x1 == null || x1.getId() == null) {
             throw new AppException(ErrorCodeEnum.PARAM_ERROR, "id 不能为空");
@@ -180,9 +170,6 @@ public class LLMConfigController {
     @ApiName(name = "llmToggleConfig", input = {LLMConfigIdX1.class, LLMConfigEnableX1.class}, description = "启用/禁用后端")
     @PostMapping("/enable")
     public BaseMessage enable(@RequestBody(required = false) BaseMessage request) {
-        if (request == null) {
-            throw new AppException(ErrorCodeEnum.PARAM_ERROR, "请求报文不能为空");
-        }
         LLMConfigIdX1 idX1 = request.getDto(LLMConfigIdX1.class);
         if (idX1 == null || idX1.getId() == null) {
             throw new AppException(ErrorCodeEnum.PARAM_ERROR, "id 不能为空");
@@ -273,8 +260,14 @@ public class LLMConfigController {
     }
 
     private static String maskApiKey(String key) {
-        if (key == null || key.isEmpty()) return "(未设置)";
-        if (key.length() <= 8) return key.substring(0, 2) + "****";
+        if (StringUtils.isBlank(key)) {
+            return "(未设置)";
+        }
+
+        if (key.length() <= 8) {
+            return key.substring(0, 2) + "****";
+        }
+
         return key.substring(0, 4) + "****" + key.substring(key.length() - 4);
     }
 }
