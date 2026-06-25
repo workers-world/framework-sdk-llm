@@ -14,7 +14,7 @@ public class CircuitBreaker {
 
     private final Map<String, AtomicInteger> failureCounts = new ConcurrentHashMap<>();
     private final Map<String, Instant> openUntil = new ConcurrentHashMap<>();
-    private final Map<String, State> states = new ConcurrentHashMap<>();
+    private final Map<String, State> stateMap = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> halfOpenProbes = new ConcurrentHashMap<>();
     private final int failureThreshold;
     private final long recoverySeconds;
@@ -31,13 +31,13 @@ public class CircuitBreaker {
     }
 
     public boolean allowsRequest(String provider) {
-        State state = states.getOrDefault(provider, State.CLOSED);
+        State state = stateMap.getOrDefault(provider, State.CLOSED);
         if (state == State.CLOSED) return true;
 
         if (state == State.OPEN) {
             Instant until = openUntil.get(provider);
             if (until != null && Instant.now().isAfter(until)) {
-                states.put(provider, State.HALF_OPEN);
+                stateMap.put(provider, State.HALF_OPEN);
                 halfOpenProbes.put(provider, new AtomicInteger(0));
                 log.info("熔断器进入半开探测: {}, 允许{}个探测请求", provider, halfOpenMaxRequests);
                 return true;
@@ -56,9 +56,9 @@ public class CircuitBreaker {
     }
 
     public void recordSuccess(String provider) {
-        State state = states.getOrDefault(provider, State.CLOSED);
+        State state = stateMap.getOrDefault(provider, State.CLOSED);
         if (state == State.HALF_OPEN) {
-            states.put(provider, State.CLOSED);
+            stateMap.put(provider, State.CLOSED);
             failureCounts.remove(provider);
             openUntil.remove(provider);
             halfOpenProbes.remove(provider);
@@ -70,10 +70,10 @@ public class CircuitBreaker {
     }
 
     public void recordFailure(String provider) {
-        State state = states.getOrDefault(provider, State.CLOSED);
+        State state = stateMap.getOrDefault(provider, State.CLOSED);
         if (state == State.HALF_OPEN) {
             // 半开探测失败，重新熔断
-            states.put(provider, State.OPEN);
+            stateMap.put(provider, State.OPEN);
             openUntil.put(provider, Instant.now().plusSeconds(recoverySeconds));
             halfOpenProbes.remove(provider);
             log.warn("熔断器半开探测失败，重新熔断: {}", provider);
@@ -81,7 +81,7 @@ public class CircuitBreaker {
         }
         int count = failureCounts.computeIfAbsent(provider, k -> new AtomicInteger(0)).incrementAndGet();
         if (count >= failureThreshold) {
-            states.put(provider, State.OPEN);
+            stateMap.put(provider, State.OPEN);
             openUntil.put(provider, Instant.now().plusSeconds(recoverySeconds));
             log.warn("熔断器触发: {}, 连续失败{}次，{}秒后进入半开状态", provider, count, recoverySeconds);
         }
