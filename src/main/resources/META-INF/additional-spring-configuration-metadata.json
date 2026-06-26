@@ -3,8 +3,35 @@
     {
       "name": "book.llm.enable",
       "type": "java.lang.Boolean",
-      "description": "是否启用 LLM 模块。",
+      "description": "Whether to enable the LLM module.",
       "defaultValue": false
+    },
+    {
+      "name": "book.llm.provider",
+      "type": "java.lang.String",
+      "description": "LLM backend provider id, e.g. openai or qwen.",
+      "defaultValue": "openai"
+    },
+    {
+      "name": "book.llm.endpoint",
+      "type": "java.lang.String",
+      "description": "LLM API base URL."
+    },
+    {
+      "name": "book.llm.api-key",
+      "type": "java.lang.String",
+      "description": "LLM API key."
+    },
+    {
+      "name": "book.llm.model",
+      "type": "java.lang.String",
+      "description": "Default LLM model id.",
+      "defaultValue": "gpt-4o"
+    },
+    {
+      "name": "book.llm.auto-classify.cron",
+      "type": "java.lang.String",
+      "description": "Cron expression for automatic LLM classification task."
     }
   ]
 }

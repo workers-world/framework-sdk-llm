@@ -11,7 +11,6 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -25,12 +24,6 @@ import java.util.List;
 @ConditionalOnProperty(name = "book.llm.enable", havingValue = "true")
 @ConditionalOnMissingBean(name = "llmService")
 public class SimpleLLMAutoConfiguration {
-
-    @Bean
-    @ConfigurationProperties(prefix = "book.llm")
-    public SimpleLLMProperties simpleLLMProperties() {
-        return new SimpleLLMProperties();
-    }
 
     @Bean
     @ConditionalOnMissingBean(LlmHttpClientSupport.class)

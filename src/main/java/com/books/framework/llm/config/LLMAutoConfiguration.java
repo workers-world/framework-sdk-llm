@@ -39,7 +39,7 @@ import java.util.*;
 
 @Slf4j
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties({LLMProperties.class, BookLlmProperties.class})
+@EnableConfigurationProperties(LLMProperties.class)
 @ConditionalOnClass(org.springframework.ai.chat.model.ChatModel.class)
 @ConditionalOnProperty(name = "book.llm.enable", havingValue = "true")
 public class LLMAutoConfiguration {

@@ -1,3 +1,4 @@
+com.books.framework.llm.config.BookLlmConfiguration
 com.books.framework.simplellm.SimpleLLMAutoConfiguration
 com.books.framework.llm.config.LLMTableInitializer
 com.books.framework.llm.config.LLMAutoConfiguration

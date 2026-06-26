@@ -206,13 +206,13 @@ public class LLMServiceImpl implements LLMService {
                     int tokens = 0;
                     int inputTokens = 0;
                     int outputTokens = 0;
-                    if (chatResponse.getMetadata() != null && chatResponse.getMetadata().getUsage() != null) {
+                    if (chatResponse != null && chatResponse.getMetadata() != null && chatResponse.getMetadata().getUsage() != null) {
                         var usage = chatResponse.getMetadata().getUsage();
                         tokens = (int) usage.getTotalTokens();
                         inputTokens = (int) usage.getPromptTokens();
                         outputTokens = (int) usage.getCompletionTokens();
                     }
-                    if (chatResponse.getMetadata() != null && chatResponse.getMetadata().getModel() != null) {
+                    if (chatResponse != null && chatResponse.getMetadata() != null && chatResponse.getMetadata().getModel() != null) {
                         modelName = chatResponse.getMetadata().getModel();
                     }
 
