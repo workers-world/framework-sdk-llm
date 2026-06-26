@@ -31,8 +31,12 @@ public class RateLimiter {
     }
 
     public boolean tryAcquire(String provider, int maxConcurrency, int providerDailyLimit, int providerPerMinuteLimit) {
-        int effectiveDaily = providerDailyLimit > 0 ? providerDailyLimit : globalDailyLimit;
-        int effectivePerMinute = providerPerMinuteLimit > 0 ? providerPerMinuteLimit : globalPerMinuteLimit;
+        Integer configuredDaily = providerDailyLimits.get(provider);
+        Integer configuredPerMinute = providerPerMinuteLimits.get(provider);
+        int effectiveDaily = providerDailyLimit > 0 ? providerDailyLimit
+                : configuredDaily != null ? configuredDaily : globalDailyLimit;
+        int effectivePerMinute = providerPerMinuteLimit > 0 ? providerPerMinuteLimit
+                : configuredPerMinute != null ? configuredPerMinute : globalPerMinuteLimit;
 
         if (!checkDaily(effectiveDaily)) return false;
         if (!checkPerMinute(effectivePerMinute)) return false;

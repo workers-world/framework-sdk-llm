@@ -156,7 +156,7 @@ public class LLMServiceImpl implements LLMService {
                 ? (lastException != null ? lastException.getMessage() : "")
                 : String.join("; ", failureDetails);
         String errorMessage = "所有后端均失败 [" + triedProviders + "] - " + detail;
-        log.error(errorMessage, lastException);
+        log.error("{}", errorMessage, lastException);
 
         throw new RuntimeException("所有后端均失败 [" + triedProviders + "] - "
                 + detail, lastException);

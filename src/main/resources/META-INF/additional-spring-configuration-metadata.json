@@ -1,0 +1,10 @@
+{
+  "properties": [
+    {
+      "name": "book.llm.enable",
+      "type": "java.lang.Boolean",
+      "description": "是否启用 LLM 模块。",
+      "defaultValue": false
+    }
+  ]
+}
