@@ -28,7 +28,7 @@ public class OllamaChatModelConfig implements ChatModelFactory {
                 .build();
         return OllamaChatModel.builder()
                 .ollamaApi(api)
-                .defaultOptions(OllamaChatOptions.builder().model(cfg.getDefaultModel()).build())
+                .options(OllamaChatOptions.builder().model(cfg.getDefaultModel()).build())
                 .build();
     }
 }

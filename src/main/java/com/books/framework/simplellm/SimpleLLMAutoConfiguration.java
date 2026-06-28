@@ -1,12 +1,13 @@
 package com.books.framework.simplellm;
 
 import com.books.framework.llm.config.LlmHttpClientSupport;
+import com.books.framework.llm.config.OpenAiCompatibleClientFactory;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.openai.api.OpenAiApi;
+import com.openai.client.OpenAIClient;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -44,14 +45,10 @@ public class SimpleLLMAutoConfiguration {
             log.warn("未配置 LLM 后端，ChatClient 将不可用。请在 llm_backend_config 表或 book.llm 配置中设置。");
             return null;
         }
-        OpenAiApi api = OpenAiApi.builder()
-                .baseUrl(cfg.endpoint)
-                .apiKey(cfg.apiKey)
-                .restClientBuilder(httpClientSupport.outboundRestClientBuilder())
-                .build();
+        OpenAIClient client = OpenAiCompatibleClientFactory.create(cfg.endpoint, cfg.apiKey);
         ChatModel model = OpenAiChatModel.builder()
-                .openAiApi(api)
-                .defaultOptions(OpenAiChatOptions.builder().model(cfg.model).build())
+                .openAiClient(client)
+                .options(OpenAiChatOptions.builder().model(cfg.model).build())
                 .build();
         log.info("SimpleLLM ChatClient 创建完成: provider={}, model={}", cfg.provider, cfg.model);
         return ChatClient.create(model);

@@ -21,10 +21,10 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.model.ModelOptionsUtils;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -46,6 +46,7 @@ public class LLMServiceImpl implements LLMService {
     private final LLMMetrics metrics;
     private final List<LLMCallInterceptor> interceptors;
     private final LLMResponseCache cache;
+    private final ObjectProvider<ToolCallback> toolCallbacks;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ExecutorService asyncExecutor = Executors.newFixedThreadPool(4);
     private final Map<String, Future<ChatResponse>> asyncTasks = new ConcurrentHashMap<>();
@@ -57,7 +58,8 @@ public class LLMServiceImpl implements LLMService {
                           LLMProperties properties,
                           LLMMetrics metrics,
                           List<LLMCallInterceptor> interceptors,
-                          LLMResponseCache cache) {
+                          LLMResponseCache cache,
+                          ObjectProvider<ToolCallback> toolCallbacks) {
         this.chatClientMap = new ConcurrentHashMap<>(chatClientMap);
         this.configMap = new ConcurrentHashMap<>();
         for (LLMBackendConfig c : configs) {
@@ -69,6 +71,7 @@ public class LLMServiceImpl implements LLMService {
         this.metrics = metrics;
         this.interceptors = interceptors != null ? interceptors.stream().sorted((a, b) -> Integer.compare(a.getOrder(), b.getOrder())).toList() : List.of();
         this.cache = cache;
+        this.toolCallbacks = toolCallbacks;
         this.rateLimiter = new RateLimiter(properties.getDailyLimit(), properties.getPerMinuteLimit());
         this.circuitBreaker = new CircuitBreaker(5, 60);
     }
@@ -178,8 +181,9 @@ public class LLMServiceImpl implements LLMService {
                     Prompt callPrompt = buildCallPrompt(messages, prompt, modelName);
 
                     ChatClient.ChatClientRequestSpec spec = chatClient.prompt(callPrompt);
-                    if (options != null && options.getToolNames() != null && !options.getToolNames().isEmpty()) {
-                        spec = spec.toolNames(options.getToolNames().toArray(new String[0]));
+                    ToolCallback[] tools = resolveTools(options);
+                    if (tools.length > 0) {
+                        spec = spec.tools(tools);
                     }
 
                     // 拦截器 beforeCall
@@ -312,8 +316,9 @@ public class LLMServiceImpl implements LLMService {
         String idempotencyKey = options != null ? options.getIdempotencyKey() : null;
 
         ChatClient.ChatClientRequestSpec streamSpec = chatClient.prompt(callPrompt);
-        if (options != null && options.getToolNames() != null && !options.getToolNames().isEmpty()) {
-            streamSpec = streamSpec.toolNames(options.getToolNames().toArray(new String[0]));
+        ToolCallback[] tools = resolveTools(options);
+        if (tools.length > 0) {
+            streamSpec = streamSpec.tools(tools);
         }
         return streamSpec.stream().chatResponse()
                 .map(chunk -> {
@@ -380,6 +385,16 @@ public class LLMServiceImpl implements LLMService {
         return null;
     }
 
+    private ToolCallback[] resolveTools(LLMCallOptions options) {
+        if (options == null || options.getToolNames() == null || options.getToolNames().isEmpty()) {
+            return new ToolCallback[0];
+        }
+        Set<String> names = new HashSet<>(options.getToolNames());
+        return toolCallbacks.stream()
+                .filter(t -> names.contains(t.getToolDefinition().name()))
+                .toArray(ToolCallback[]::new);
+    }
+
     private List<String> buildFallbackChain(String primaryProvider, boolean allowFallback) {
         if (!allowFallback) {
             return primaryProvider != null && !primaryProvider.isEmpty()
@@ -431,18 +446,25 @@ public class LLMServiceImpl implements LLMService {
     }
 
     private Prompt buildCallPrompt(List<Message> messages, Prompt prompt, String model) {
-        OpenAiChatOptions runtimeOptions = null;
-        if (prompt.getOptions() != null) {
-            runtimeOptions = ModelOptionsUtils.copyToTarget(prompt.getOptions(), ChatOptions.class, OpenAiChatOptions.class);
+        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder();
+        if (prompt.getOptions() instanceof OpenAiChatOptions openAiOpts) {
+            if (openAiOpts.getTemperature() != null) {
+                builder.temperature(openAiOpts.getTemperature());
+            }
+            if (openAiOpts.getMaxTokens() != null) {
+                builder.maxTokens(openAiOpts.getMaxTokens());
+            }
+            if (openAiOpts.getResponseFormat() != null) {
+                builder.responseFormat(openAiOpts.getResponseFormat());
+            }
+            if (openAiOpts.getModel() != null && !openAiOpts.getModel().isEmpty()) {
+                builder.model(openAiOpts.getModel());
+            }
         }
-        ChatOptions callOptions = runtimeOptions;
         if (model != null && !model.isEmpty()) {
-            callOptions = ModelOptionsUtils.merge(
-                    OpenAiChatOptions.builder().model(model).build(),
-                    runtimeOptions,
-                    OpenAiChatOptions.class);
+            builder.model(model);
         }
-        return new Prompt(messages, callOptions);
+        return new Prompt(messages, builder.build());
     }
 
     private List<Message> sanitizeMessages(List<Message> messages, LLMCallOptions options) {

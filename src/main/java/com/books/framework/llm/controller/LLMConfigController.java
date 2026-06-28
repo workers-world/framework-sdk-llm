@@ -16,7 +16,8 @@ import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.openai.api.OpenAiApi;
+import com.openai.client.OpenAIClient;
+import com.books.framework.llm.config.OpenAiCompatibleClientFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestClient;
@@ -256,20 +257,16 @@ public class LLMConfigController {
         String gatewayApiKey = cfg.getGatewayApiKey();
         String defaultModel = cfg.getDefaultModel() != null ? cfg.getDefaultModel().split(",")[0].trim() : "gpt-4o";
 
-        RestClient.Builder restClientBuilder = httpClientSupport.outboundRestClientBuilder();
+        Map<String, String> extraHeaders = new java.util.HashMap<>();
         if (gatewayApiKey != null && !gatewayApiKey.isEmpty()) {
-            restClientBuilder.defaultHeader("X-API-Key", apiKey);
+            extraHeaders.put("X-API-Key", apiKey);
             apiKey = gatewayApiKey;
         }
 
-        OpenAiApi api = OpenAiApi.builder()
-                .baseUrl(baseUrl)
-                .apiKey(apiKey)
-                .restClientBuilder(restClientBuilder)
-                .build();
+        OpenAIClient client = OpenAiCompatibleClientFactory.create(baseUrl, apiKey, extraHeaders);
         return OpenAiChatModel.builder()
-                .openAiApi(api)
-                .defaultOptions(OpenAiChatOptions.builder().model(defaultModel).build())
+                .openAiClient(client)
+                .options(OpenAiChatOptions.builder().model(defaultModel).build())
                 .build();
     }
 

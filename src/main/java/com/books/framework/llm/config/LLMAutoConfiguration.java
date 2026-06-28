@@ -19,7 +19,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.ollama.OllamaChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.openai.api.OpenAiApi;
+import com.openai.client.OpenAIClient;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -181,11 +181,12 @@ public class LLMAutoConfiguration {
                                       LLMProperties properties,
                                       ObjectProvider<LLMMetrics> metricsProvider,
                                       ObjectProvider<LLMCallInterceptor> interceptors,
-                                      ObjectProvider<LLMResponseCache> cacheProvider) {
+                                      ObjectProvider<LLMResponseCache> cacheProvider,
+                                      ObjectProvider<ToolCallback> toolCallbacks) {
         LLMCallLogger callLogger = callLoggerProvider.getIfAvailable();
         LLMMetrics metrics = metricsProvider.getIfAvailable();
         LLMResponseCache cache = cacheProvider.getIfAvailable();
-        return new LLMServiceImpl(chatClients, configs, sanitizers, callLogger, properties, metrics, interceptors.stream().toList(), cache);
+        return new LLMServiceImpl(chatClients, configs, sanitizers, callLogger, properties, metrics, interceptors.stream().toList(), cache, toolCallbacks);
     }
 
     // ===== Controllers =====
@@ -258,21 +259,16 @@ public class LLMAutoConfiguration {
         String gatewayApiKey = cfg.getGatewayApiKey();
         String defaultModel = model != null ? model.split(",")[0].trim() : "gpt-4o";
 
-        RestClient.Builder restClientBuilder = httpClientSupport.outboundRestClientBuilder();
-        // gateway 模式：用 gatewayApiKey 做 Bearer 认证，原始 apiKey 通过 X-API-Key 传递
+        Map<String, String> extraHeaders = new HashMap<>();
         if (gatewayApiKey != null && !gatewayApiKey.isEmpty()) {
-            restClientBuilder.defaultHeader("X-API-Key", apiKey);
+            extraHeaders.put("X-API-Key", apiKey);
             apiKey = gatewayApiKey;
         }
 
-        OpenAiApi api = OpenAiApi.builder()
-                .baseUrl(baseUrl)
-                .apiKey(apiKey)
-                .restClientBuilder(restClientBuilder)
-                .build();
+        OpenAIClient client = OpenAiCompatibleClientFactory.create(baseUrl, apiKey, extraHeaders);
         return OpenAiChatModel.builder()
-                .openAiApi(api)
-                .defaultOptions(OpenAiChatOptions.builder().model(defaultModel).build())
+                .openAiClient(client)
+                .options(OpenAiChatOptions.builder().model(defaultModel).build())
                 .build();
     }
 

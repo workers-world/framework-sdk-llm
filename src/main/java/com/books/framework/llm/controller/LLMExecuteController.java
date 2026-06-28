@@ -4,24 +4,30 @@ import com.books.framework.annotation.ApiName;
 import com.books.framework.constants.ErrorCodeEnum;
 import com.books.framework.exception.AppException;
 import com.books.framework.llm.LLMService;
-import com.books.framework.llm.dto.*;
+import com.books.framework.llm.dto.LLMBatchExecuteX1;
+import com.books.framework.llm.dto.LLMExecuteX1;
+import com.books.framework.llm.dto.LLMResponseZ1;
 import com.books.framework.llm.model.LLMCallOptions;
 import com.books.framework.message.BaseMessage;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.content.Media;
-import org.springframework.util.MimeType;
+import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.openai.api.ResponseFormat;
 import org.springframework.http.MediaType;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.util.MimeType;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 
-import java.math.BigDecimal;
 import java.time.Duration;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/llm")
@@ -58,7 +64,8 @@ public class LLMExecuteController {
             int tokens = 0;
             String model = null;
             if (chatResp.getMetadata() != null) {
-                if (chatResp.getMetadata().getUsage() != null) tokens = (int) chatResp.getMetadata().getUsage().getTotalTokens();
+                if (chatResp.getMetadata().getUsage() != null)
+                    tokens = (int) chatResp.getMetadata().getUsage().getTotalTokens();
                 model = chatResp.getMetadata().getModel();
             }
             long elapsed = System.currentTimeMillis() - start;
@@ -136,7 +143,7 @@ public class LLMExecuteController {
     }
 
     private Prompt buildPrompt(LLMExecuteX1 x1) {
-        List<org.springframework.ai.chat.messages.Message> msgs = new ArrayList<>();
+        List<Message> msgs = new ArrayList<>();
         if (x1.getSystemPrompt() != null && !x1.getSystemPrompt().isEmpty()) {
             msgs.add(new SystemMessage(x1.getSystemPrompt()));
         }
@@ -162,11 +169,11 @@ public class LLMExecuteController {
         }
 
         if ("JSON_SCHEMA".equals(x1.getResponseFormat()) && x1.getJsonSchema() != null) {
-            optsBuilder.responseFormat(ResponseFormat.builder()
-                    .type(ResponseFormat.Type.JSON_SCHEMA).jsonSchema(x1.getJsonSchema()).build());
+            optsBuilder.responseFormat(OpenAiChatModel.ResponseFormat.builder()
+                    .type(OpenAiChatModel.ResponseFormat.Type.JSON_SCHEMA).jsonSchema(x1.getJsonSchema()).build());
         } else if ("JSON".equals(x1.getResponseFormat())) {
-            optsBuilder.responseFormat(ResponseFormat.builder()
-                    .type(ResponseFormat.Type.JSON_OBJECT).build());
+            optsBuilder.responseFormat(OpenAiChatModel.ResponseFormat.builder()
+                    .type(OpenAiChatModel.ResponseFormat.Type.JSON_OBJECT).build());
         }
         return new Prompt(msgs, optsBuilder.build());
     }
