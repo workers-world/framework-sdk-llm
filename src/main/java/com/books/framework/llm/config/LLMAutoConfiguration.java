@@ -16,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.image.ImageModel;
 import org.springframework.ai.ollama.OllamaChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -114,6 +115,28 @@ public class LLMAutoConfiguration {
                 log.info("LLM ChatModel 创建成功: provider={}, model={}", cfg.getProvider(), cfg.getDefaultModel());
             } catch (Exception e) {
                 log.error("LLM ChatModel 创建失败: provider={}, error={}", cfg.getProvider(), e.getMessage());
+            }
+        }
+        return map;
+    }
+
+    @Bean
+    @ConditionalOnBean(JdbcTemplate.class)
+    @ConditionalOnMissingBean(name = "llmImageModels")
+    public Map<String, ImageModel> llmImageModels(JdbcTemplate jdbc,
+                                                   List<ImageModelFactory> factories) {
+        Map<String, ImageModel> map = new LinkedHashMap<>();
+        List<LLMBackendConfig> configs = loadConfigs(jdbc);
+        for (LLMBackendConfig cfg : configs) {
+            if (!cfg.isEnabled()) {
+                continue;
+            }
+            try {
+                ImageModel model = createImageModel(cfg, factories);
+                map.put(cfg.getProvider(), model);
+                log.info("LLM ImageModel 创建成功: provider={}", cfg.getProvider());
+            } catch (Exception e) {
+                log.error("LLM ImageModel 创建失败: provider={}, error={}", cfg.getProvider(), e.getMessage());
             }
         }
         return map;
@@ -270,6 +293,16 @@ public class LLMAutoConfiguration {
                 .openAiClient(client)
                 .options(OpenAiChatOptions.builder().model(defaultModel).build())
                 .build();
+    }
+
+    private ImageModel createImageModel(LLMBackendConfig cfg, List<ImageModelFactory> factories) {
+        String provider = cfg.getProvider();
+        for (ImageModelFactory factory : factories) {
+            if (factory.supports(provider)) {
+                return factory.create(cfg);
+            }
+        }
+        throw new IllegalStateException("未找到 ImageModelFactory: provider=" + provider);
     }
 
     private void ensureTables(JdbcTemplate jdbc) {
