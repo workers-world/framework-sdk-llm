@@ -16,6 +16,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 public class WorkerGatewayImageModel implements ImageModel {
 
@@ -69,13 +70,16 @@ public class WorkerGatewayImageModel implements ImageModel {
             throw new WorkerGatewayImageException(String.valueOf(resp.get("error")));
         }
 
-        String key = resp.get("key") == null ? null : String.valueOf(resp.get("key"));
-        String model = resp.get("model") == null ? options.getModel() : String.valueOf(resp.get("model"));
+        String key = Objects.requireNonNullElse(
+                resp.get("key") == null ? null : String.valueOf(resp.get("key")), "");
+        String model = Objects.requireNonNullElse(
+                resp.get("model") == null ? options.getModel() : String.valueOf(resp.get("model")), defaultModel);
         Long created = null;
         Object createdRaw = resp.get("created");
         if (createdRaw instanceof Number number) {
             created = number.longValue();
         }
+        created = Objects.requireNonNullElse(created, 0L);
 
         ImageResponseMetadata metadata = new ImageResponseMetadata(created);
         metadata.put(WorkerImageResponses.META_KEY, key);

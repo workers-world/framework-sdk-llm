@@ -20,7 +20,6 @@ import com.openai.client.OpenAIClient;
 import com.books.framework.llm.config.OpenAiCompatibleClientFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.client.RestClient;
 
 import java.math.BigDecimal;
 import java.util.*;

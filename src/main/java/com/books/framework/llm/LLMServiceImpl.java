@@ -118,7 +118,7 @@ public class LLMServiceImpl implements LLMService {
 
         long start = System.currentTimeMillis();
         Exception lastException = null;
-        String triedProviders = "";
+        StringBuilder triedProviders = new StringBuilder();
         List<String> failureDetails = new ArrayList<>();
 
         for (String provider : providers) {
@@ -149,7 +149,7 @@ public class LLMServiceImpl implements LLMService {
                 return result;
             } catch (Exception e) {
                 lastException = e;
-                triedProviders += provider + ",";
+                triedProviders.append(provider).append(',');
                 failureDetails.add(provider + ": " + e.getMessage());
                 log.warn("{} 调用失败{}: {}", provider, explicitProvider ? "" : "，尝试故障转移", e.getMessage());
                 // rateLimiter.release done in callProvider finally
@@ -183,11 +183,11 @@ public class LLMServiceImpl implements LLMService {
                     ChatClient.ChatClientRequestSpec spec = chatClient.prompt(callPrompt);
                     ToolCallback[] tools = resolveTools(options);
                     if (tools.length > 0) {
-                        spec = spec.tools(tools);
+                        spec = spec.toolCallbacks(java.util.Arrays.asList(tools));
                     }
 
                     // 拦截器 beforeCall
-                    ChatResponse intercepted = null;
+                    ChatResponse intercepted;
                     for (LLMCallInterceptor interceptor : interceptors) {
                         intercepted = interceptor.beforeCall(prompt, options);
                         if (intercepted != null) return intercepted;
@@ -318,7 +318,7 @@ public class LLMServiceImpl implements LLMService {
         ChatClient.ChatClientRequestSpec streamSpec = chatClient.prompt(callPrompt);
         ToolCallback[] tools = resolveTools(options);
         if (tools.length > 0) {
-            streamSpec = streamSpec.tools(tools);
+            streamSpec = streamSpec.toolCallbacks(java.util.Arrays.asList(tools));
         }
         return streamSpec.stream().chatResponse()
                 .map(chunk -> {

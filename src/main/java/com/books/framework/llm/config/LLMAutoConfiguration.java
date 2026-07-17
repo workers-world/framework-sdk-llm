@@ -155,7 +155,7 @@ public class LLMAutoConfiguration {
             ChatClient.Builder builder = ChatClient.builder(entry.getValue())
                     .defaultAdvisors(new SimpleLoggerAdvisor());
             if (!tools.isEmpty()) {
-                builder.defaultTools(tools.toArray(new ToolCallback[0]));
+                builder.defaultToolCallbacks(tools);
             }
             map.put(entry.getKey(), builder.build());
         }
