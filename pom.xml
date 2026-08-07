@@ -128,4 +128,17 @@
             </plugin>
         </plugins>
     </build>
+
+    <distributionManagement>
+        <repository>
+            <id>github-framework-sdk-llm</id>
+            <name>GitHub Packages — framework-sdk-llm</name>
+            <url>https://maven.pkg.github.com/ONGOING-Z/framework-sdk-llm</url>
+        </repository>
+        <snapshotRepository>
+            <id>github-framework-sdk-llm</id>
+            <name>GitHub Packages — framework-sdk-llm</name>
+            <url>https://maven.pkg.github.com/ONGOING-Z/framework-sdk-llm</url>
+        </snapshotRepository>
+    </distributionManagement>
 </project>

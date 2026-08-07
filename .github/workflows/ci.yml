@@ -1,0 +1,23 @@
+name: CI
+
+# workers-world actions bundle: actions/v0.4.3（禁止 @master）
+on:
+  push:
+    branches: ["dev_*"]
+  pull_request:
+    branches: ["master"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  ci:
+    uses: workers-world/.github/.github/workflows/java/java-maven-sdk-ci.yml@actions/v0.4.3
+    secrets: inherit
+    with:
+      github_packages_repo: framework-sdk-llm
+      server_id: github-framework-sdk-llm
+      github_packages_repos_for_verify: framework-sdk:github-framework-sdk
+      maven_goals: verify
+      maven_deploy_args: -DskipTests
