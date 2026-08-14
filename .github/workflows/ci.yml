@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   ci:
-    uses: workers-world/.github/.github/workflows/java-maven-sdk-ci.yml@actions/v0.4.12
+    uses: workers-world/.github/.github/workflows/java-maven-sdk-ci.yml@actions/v0.4.13
     secrets:
       GITHUB_PACKAGES_TOKEN: ${{ secrets.GITHUB_PACKAGES_TOKEN }}
       WORKERS_WORLD_GHA_TOKEN: ${{ secrets.WORKERS_WORLD_GHA_TOKEN }}
