@@ -4,6 +4,7 @@ name: CI
 on:
   push:
     branches: ["dev_*"]
+    tags: ["v*"]
   pull_request:
     branches: ["master"]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -23,7 +24,7 @@ jobs:
     with:
       github_packages_repo: framework-sdk-llm
       server_id: github-framework-sdk-llm
-      publish_on_push: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'dev_') && github.ref_type == 'branch' }}
+      publish_on_push: ${{ github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v') }}
       concurrency_group: sdk-ci-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
       github_packages_repos_for_verify: framework-sdk:github-framework-sdk
       maven_goals: verify
