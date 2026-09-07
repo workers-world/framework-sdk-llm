@@ -8,7 +8,6 @@ import com.books.framework.llm.log.LLMMetrics;
 import com.books.framework.llm.model.LLMBackendConfig;
 import com.books.framework.llm.model.LLMCallOptions;
 import com.books.framework.llm.rate.CircuitBreaker;
-import com.books.framework.llm.rate.RateLimiter;
 import com.books.framework.llm.sanitizer.Sanitizer;
 import com.books.framework.llm.sanitizer.SanitizerChain;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -34,12 +33,11 @@ import java.util.concurrent.*;
 import reactor.core.publisher.Flux;
 
 @Slf4j
-public class LLMServiceImpl implements LLMService {
+public class LLMServiceImpl implements LLMService, org.springframework.beans.factory.DisposableBean {
 
     private final Map<String, ChatClient> chatClientMap;
     private final Map<String, LLMBackendConfig> configMap;
     private final SanitizerChain sanitizerChain;
-    private final RateLimiter rateLimiter;
     private final CircuitBreaker circuitBreaker;
     private final LLMCallLogger callLogger;
     private final LLMProperties properties;
@@ -72,8 +70,23 @@ public class LLMServiceImpl implements LLMService {
         this.interceptors = interceptors != null ? interceptors.stream().sorted((a, b) -> Integer.compare(a.getOrder(), b.getOrder())).toList() : List.of();
         this.cache = cache;
         this.toolCallbacks = toolCallbacks;
-        this.rateLimiter = new RateLimiter(properties.getDailyLimit(), properties.getPerMinuteLimit());
+        // 限流已下沉到 RateLimitedChatModel 模型装饰层(覆盖直连 ChatClient 的路径),
+        // 本服务只保留熔断;若在此二次限流会与装饰层双计配额
         this.circuitBreaker = new CircuitBreaker(5, 60);
+    }
+
+    @Override
+    public void destroy() {
+        // 历史版本从不 shutdown:非 daemon 线程池导致上下文关闭后 JVM 无法退出
+        asyncExecutor.shutdown();
+        try {
+            if (!asyncExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                asyncExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            asyncExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Override
@@ -129,16 +142,9 @@ public class LLMServiceImpl implements LLMService {
             }
             LLMBackendConfig config = configMap.get(provider);
 
-            // 限流 + 熔断
-            int maxConcurrency = config != null ? config.getMaxConcurrency() : 5;
-            int pDailyLimit = config != null ? config.getDailyLimit() : 0;
-            int pPerMinuteLimit = config != null ? config.getPerMinuteLimit() : 0;
-            if (!rateLimiter.tryAcquire(provider, maxConcurrency, pDailyLimit, pPerMinuteLimit)) {
-                log.warn("{} 限流，尝试故障转移", provider);
-                continue;
-            }
+            // 熔断检查;限流由 RateLimitedChatModel 装饰层执行——超限时其抛出的
+            // RuntimeException 在下方 catch 中被捕获,同样触发故障转移
             if (!circuitBreaker.allowsRequest(provider)) {
-                rateLimiter.release(provider);
                 log.warn("{} 熔断中，尝试故障转移", provider);
                 continue;
             }
@@ -152,7 +158,6 @@ public class LLMServiceImpl implements LLMService {
                 triedProviders.append(provider).append(',');
                 failureDetails.add(provider + ": " + e.getMessage());
                 log.warn("{} 调用失败{}: {}", provider, explicitProvider ? "" : "，尝试故障转移", e.getMessage());
-                // rateLimiter.release done in callProvider finally
             }
         }
         String detail = failureDetails.isEmpty()
@@ -174,11 +179,11 @@ public class LLMServiceImpl implements LLMService {
         String retryOnCodes = config != null ? config.getRetryOnCodes() : "";
         Exception lastException = null;
 
-        try {
-            for (int attempt = 0; attempt <= maxRetries; attempt++) {
-                try {
-                    List<Message> messages = sanitizedMessages != null ? sanitizedMessages : prompt.getInstructions();
-                    Prompt callPrompt = buildCallPrompt(messages, prompt, modelName);
+        // 并发槽由 RateLimitedChatModel 装饰层获取/释放,此处不再 try-finally release
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                List<Message> messages = sanitizedMessages != null ? sanitizedMessages : prompt.getInstructions();
+                Prompt callPrompt = buildCallPrompt(messages, prompt, modelName);
 
                     ChatClient.ChatClientRequestSpec spec = chatClient.prompt(callPrompt);
                     ToolCallback[] tools = resolveTools(options);
@@ -226,13 +231,14 @@ public class LLMServiceImpl implements LLMService {
                         cache.put(provider, modelName, toPromptLog(prompt.getInstructions()), chatResponse);
                     }
 
-                    // DB 审计日志
+                    // DB 审计日志:写脱敏后的 prompt(历史版本写原始 prompt,PII 落库)
                     if (callLogger != null) {
                         try {
                             BigDecimal cost = calcCost(inputTokens, outputTokens, config);
                             callLogger.log(LLMCallLogEntry.builder()
                                     .provider(provider).modelName(modelName)
-                                    .requestPrompt(toPromptLog(prompt.getInstructions()))
+                                    .requestPrompt(toPromptLog(sanitizedMessages != null
+                                            ? sanitizedMessages : prompt.getInstructions()))
                                     .responseText(getContent(chatResponse))
                                     .inputTokens(inputTokens).outputTokens(outputTokens)
                                     .tokensUsed(tokens).cost(cost)
@@ -270,7 +276,8 @@ public class LLMServiceImpl implements LLMService {
                 try {
                     callLogger.log(LLMCallLogEntry.builder()
                             .provider(provider).modelName(modelName)
-                            .requestPrompt(toPromptLog(prompt.getInstructions()))
+                            .requestPrompt(toPromptLog(sanitizedMessages != null
+                                    ? sanitizedMessages : prompt.getInstructions()))
                             .success(false).errorMessage(lastException != null ? lastException.getMessage() : null)
                             .responseTimeMs((int) elapsed)
                             .idempotencyKey(idempotencyKey)
@@ -279,9 +286,6 @@ public class LLMServiceImpl implements LLMService {
             }
             throw new RuntimeException("LLM 调用失败: " + provider + " (model=" + modelName + ") - "
                     + (lastException != null ? lastException.getMessage() : ""), lastException);
-        } finally {
-            rateLimiter.release(provider);
-        }
     }
 
     @Override
@@ -298,15 +302,8 @@ public class LLMServiceImpl implements LLMService {
         List<Message> sanitizedMessages = sanitizeMessages(prompt.getInstructions(), options);
         List<Message> messages = sanitizedMessages != null ? sanitizedMessages : prompt.getInstructions();
 
-        // 限流 + 熔断
-        int maxConcurrency = config != null ? config.getMaxConcurrency() : 5;
-        int pDailyLimit = config != null ? config.getDailyLimit() : 0;
-        int pPerMinuteLimit = config != null ? config.getPerMinuteLimit() : 0;
-        if (!rateLimiter.tryAcquire(provider, maxConcurrency, pDailyLimit, pPerMinuteLimit)) {
-            throw new RuntimeException("调用频率限制: " + provider);
-        }
+        // 熔断检查;限流由 RateLimitedChatModel 装饰层执行(含流式路径的并发槽释放)
         if (!circuitBreaker.allowsRequest(provider)) {
-            rateLimiter.release(provider);
             throw new RuntimeException("后端已熔断: " + provider);
         }
 
@@ -328,13 +325,11 @@ public class LLMServiceImpl implements LLMService {
                     return chunk;
                 })
                 .doOnComplete(() -> {
-                    rateLimiter.release(provider);
                     circuitBreaker.recordSuccess(provider);
                     long elapsed = System.currentTimeMillis() - start;
                     log.info("LLM 流式调用完成: provider={}, model={}, elapsed={}ms", provider, modelName, elapsed);
                 })
                 .doOnError(e -> {
-                    rateLimiter.release(provider);
                     circuitBreaker.recordFailure(provider);
                     long elapsed = System.currentTimeMillis() - start;
                     log.error("LLM 流式调用失败: provider={}, elapsed={}ms, error={}", provider, elapsed, e.getMessage());
@@ -342,7 +337,7 @@ public class LLMServiceImpl implements LLMService {
                         try {
                             callLogger.log(LLMCallLogEntry.builder()
                                     .provider(provider).modelName(modelName)
-                                    .requestPrompt(toPromptLog(prompt.getInstructions()))
+                                    .requestPrompt(toPromptLog(messages))
                                     .success(false).errorMessage(e.getMessage())
                                     .responseTimeMs((int) elapsed)
                                     .idempotencyKey(idempotencyKey)
@@ -350,6 +345,7 @@ public class LLMServiceImpl implements LLMService {
                         } catch (Exception ignored) {}
                     }
                 });
+                // 并发槽释放由模型装饰层 doFinally 兜底(complete/error/cancel 全覆盖)
     }
 
     @Override

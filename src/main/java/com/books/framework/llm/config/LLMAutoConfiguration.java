@@ -100,19 +100,40 @@ public class LLMAutoConfiguration {
 
     // ===== ChatModel：从 DB 配置创建（建表+查询合并，确保表存在） =====
 
+    /**
+     * 共享限流器:按 provider 独立计数。挂到 {@link com.books.framework.llm.rate.RateLimitedChatModel}
+     * 装饰层,使绕过 LLMService 直连 ChatClient 的调用路径同样受配额约束。
+     */
+    @Bean
+    @ConditionalOnMissingBean(com.books.framework.llm.rate.RateLimiter.class)
+    public com.books.framework.llm.rate.RateLimiter llmRateLimiter(LLMProperties properties) {
+        return new com.books.framework.llm.rate.RateLimiter(properties.getDailyLimit(), properties.getPerMinuteLimit());
+    }
+
     @Bean
     @ConditionalOnBean(JdbcTemplate.class)
     @ConditionalOnMissingBean(name = "llmChatModels")
     public Map<String, ChatModel> llmChatModels(JdbcTemplate jdbc,
-                                                  List<ChatModelFactory> factories) {
+                                                  List<ChatModelFactory> factories,
+                                                  LLMProperties properties,
+                                                  com.books.framework.llm.rate.RateLimiter llmRateLimiter) {
         Map<String, ChatModel> map = new LinkedHashMap<>();
         List<LLMBackendConfig> configs = loadConfigs(jdbc);
         for (LLMBackendConfig cfg : configs) {
             if (!cfg.isEnabled()) continue;
             try {
-                ChatModel model = createChatModel(cfg, factories);
+                ChatModel model = createChatModel(cfg, factories, properties);
+                // 限流下沉到模型层:配额>0 时包装,直连 ChatClient 的路径也被约束;
+                // 包装在超时/工厂创建之后,LLMService 内不再二次限流(避免双计)
+                if (cfg.getDailyLimit() > 0 || cfg.getPerMinuteLimit() > 0 || cfg.getMaxConcurrency() > 0) {
+                    model = new com.books.framework.llm.rate.RateLimitedChatModel(
+                            cfg.getProvider(), model, llmRateLimiter,
+                            cfg.getMaxConcurrency(), cfg.getDailyLimit(), cfg.getPerMinuteLimit());
+                }
                 map.put(cfg.getProvider(), model);
-                log.info("LLM ChatModel 创建成功: provider={}, model={}", cfg.getProvider(), cfg.getDefaultModel());
+                log.info("LLM ChatModel 创建成功: provider={}, model={}, dailyLimit={}, perMinuteLimit={}, maxConcurrency={}, timeoutMs={}",
+                        cfg.getProvider(), cfg.getDefaultModel(), cfg.getDailyLimit(), cfg.getPerMinuteLimit(),
+                        cfg.getMaxConcurrency(), effectiveTimeoutMs(cfg, properties));
             } catch (Exception e) {
                 log.error("LLM ChatModel 创建失败: provider={}, error={}", cfg.getProvider(), e.getMessage());
             }
@@ -142,18 +163,23 @@ public class LLMAutoConfiguration {
         return map;
     }
 
-    // ===== ChatClient：用 Spring AI 内置 Advisor + SimpleLoggerAdvisor =====
+    // ===== ChatClient：用 Spring AI 内置 Advisor;prompt 日志 Advisor 需显式开启 =====
 
     @Bean
     @ConditionalOnMissingBean(name = "llmChatClients")
     public Map<String, ChatClient> llmChatClients(
             @org.springframework.beans.factory.annotation.Qualifier("llmChatModels") Map<String, ChatModel> chatModels,
-            ObjectProvider<ToolCallback> toolCallbacks) {
+            ObjectProvider<ToolCallback> toolCallbacks,
+            LLMProperties properties) {
         List<ToolCallback> tools = toolCallbacks.stream().toList();
         Map<String, ChatClient> map = new LinkedHashMap<>();
         for (Map.Entry<String, ChatModel> entry : chatModels.entrySet()) {
-            ChatClient.Builder builder = ChatClient.builder(entry.getValue())
-                    .defaultAdvisors(new SimpleLoggerAdvisor());
+            ChatClient.Builder builder = ChatClient.builder(entry.getValue());
+            // SimpleLoggerAdvisor 会把完整 prompt/响应打进应用日志,含交易对手等敏感内容;
+            // 默认关闭,调试时用 llm.log-prompts=true 显式开启
+            if (properties.isLogPrompts()) {
+                builder.defaultAdvisors(new SimpleLoggerAdvisor());
+            }
             if (!tools.isEmpty()) {
                 builder.defaultToolCallbacks(tools);
             }
@@ -258,7 +284,7 @@ public class LLMAutoConfiguration {
 
     // ===== 内部方法 =====
 
-    private ChatModel createChatModel(LLMBackendConfig cfg, List<ChatModelFactory> factories) {
+    private ChatModel createChatModel(LLMBackendConfig cfg, List<ChatModelFactory> factories, LLMProperties properties) {
         String provider = cfg.getProvider();
         for (ChatModelFactory f : factories) {
             if (f.supports(provider)) {
@@ -272,7 +298,12 @@ public class LLMAutoConfiguration {
             switch (provider.toLowerCase()) {
                 case "qwen":   baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1"; break;
                 case "deepseek": baseUrl = "https://api.deepseek.com/v1"; break;
-                case "cloudflare": baseUrl = "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai"; break;
+                // cloudflare 网关的端点含 account_id,无法作为静态默认值(历史版本的
+                // 字面量模板不可用);必须通过 ChatModelFactory SPI 提供,如消费方的
+                // CloudflareWorkerChatModelFactory
+                case "cloudflare":
+                    throw new IllegalStateException(
+                            "provider=cloudflare 必须通过 ChatModelFactory SPI 提供(endpoint 需含 account_id)");
                 case "groq":   baseUrl = "https://api.groq.com/openai/v1"; break;
                 case "together": baseUrl = "https://api.together.xyz/v1"; break;
                 default:        baseUrl = "https://api.openai.com/v1";
@@ -288,11 +319,21 @@ public class LLMAutoConfiguration {
             apiKey = gatewayApiKey;
         }
 
-        OpenAIClient client = OpenAiCompatibleClientFactory.create(baseUrl, apiKey, extraHeaders);
+        // 超时接线:DB timeout_ms 优先,回落 llm.default-timeout-ms(历史版本两处配置均未生效)
+        long timeoutMs = effectiveTimeoutMs(cfg, properties);
+        OpenAIClient client = OpenAiCompatibleClientFactory.create(baseUrl, apiKey, extraHeaders, timeoutMs);
         return OpenAiChatModel.builder()
                 .openAiClient(client)
                 .options(OpenAiChatOptions.builder().model(defaultModel).build())
                 .build();
+    }
+
+    static long effectiveTimeoutMs(LLMBackendConfig cfg, LLMProperties properties) {
+        if (cfg != null && cfg.getTimeoutMs() > 0) {
+            return cfg.getTimeoutMs();
+        }
+        return properties != null && properties.getDefaultTimeoutMs() > 0
+                ? properties.getDefaultTimeoutMs() : 10_000L;
     }
 
     private ImageModel createImageModel(LLMBackendConfig cfg, List<ImageModelFactory> factories) {

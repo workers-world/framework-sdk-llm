@@ -56,4 +56,34 @@ class RateLimiterTest {
         rl.resetDaily();
         assertTrue(rl.tryAcquire("e", 5, 0, 0));
     }
+
+    @Test
+    void providerCountersAreIndependent() {
+        // 历史版本为单一全局计数器:A 后端用满配额后 B 后端也被限流
+        RateLimiter rl = new RateLimiter(1, 100);
+        assertTrue(rl.tryAcquire("p1", 5, 0, 0));
+        assertFalse(rl.tryAcquire("p1", 5, 0, 0));
+        assertTrue(rl.tryAcquire("p2", 5, 0, 0), "另一 provider 不应被 p1 的用量影响");
+        assertEquals(1, rl.getDailyCount("p1"));
+        assertEquals(1, rl.getDailyCount("p2"));
+        assertEquals(2, rl.getDailyCount());
+    }
+
+    @Test
+    void dailyWindowResetsOnCalendarDay() {
+        // 历史版本为「距上次重置 24h」滚动窗口;现在是本地自然日切换即清零
+        RateLimiter rl = new RateLimiter(1, 100);
+        assertTrue(rl.tryAcquire("day", 5, 0, 0));
+        assertFalse(rl.tryAcquire("day", 5, 0, 0));
+        rl.forceDailyEpochDay(java.time.LocalDate.now().toEpochDay() + 1);
+        assertTrue(rl.tryAcquire("day", 5, 0, 0), "自然日切换后配额应重置");
+    }
+
+    @Test
+    void minuteLimitIsPerProvider() {
+        RateLimiter rl = new RateLimiter(100, 1);
+        assertTrue(rl.tryAcquire("m1", 5, 0, 0));
+        assertFalse(rl.tryAcquire("m1", 5, 0, 0));
+        assertTrue(rl.tryAcquire("m2", 5, 0, 0));
+    }
 }
