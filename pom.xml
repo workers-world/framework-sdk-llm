@@ -19,7 +19,18 @@
         <spring.boot.version>3.4.5</spring.boot.version>
         <spring-ai.version>1.1.5</spring-ai.version>
         <maven.javadoc.skip>true</maven.javadoc.skip>
+        <!-- FIXME(WW-33): Bump to a stable framework-sdk-bom release once com.books:framework-sdk
+             publishes non-SNAPSHOT artifacts to a resolvable Maven repository (see README.md). -->
+        <framework-sdk.version>1.4.1-SNAPSHOT</framework-sdk.version>
     </properties>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
 
     <dependencyManagement>
         <dependencies>
@@ -40,7 +51,7 @@
             <dependency>
                 <groupId>com.books</groupId>
                 <artifactId>framework-sdk-bom</artifactId>
-                <version>1.4.1-SNAPSHOT</version>
+                <version>${framework-sdk.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

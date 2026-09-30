@@ -1,0 +1,34 @@
+# Example host application configuration for framework-sdk-llm.
+# Copy relevant sections into your Spring Boot application.yml.
+
+book:
+  llm:
+    enable: true
+    # --- SimpleLLM mode (single ChatClient; used when LLMService is not registered) ---
+    provider: openai
+    endpoint: https://api.openai.com/v1
+    api-key: ${OPENAI_API_KEY}
+    model: gpt-4o
+
+# Full LLM module limits (LLMProperties, prefix "llm")
+llm:
+  daily-limit: 50
+  per-minute-limit: 10
+  default-timeout-ms: 10000
+  active-provider: openai
+
+# Example: local Ollama via DB config (full module)
+# After startup, insert:
+#   provider=ollama, endpoint=http://localhost:11434, default_model=llama3.2
+#
+# Example: DeepSeek via SimpleLLM
+# book.llm.provider: deepseek
+# book.llm.endpoint: https://api.deepseek.com/v1
+# book.llm.api-key: ${DEEPSEEK_API_KEY}
+# book.llm.model: deepseek-chat
+
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/your_app
+    username: app
+    password: secret
