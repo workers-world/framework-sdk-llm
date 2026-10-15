@@ -109,6 +109,21 @@
         </dependency>
     </dependencies>
 
+    <repositories>
+        <repository>
+            <id>github-framework-sdk</id>
+            <url>https://maven.pkg.github.com/workers-world/framework-sdk</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>true</enabled></snapshots>
+        </repository>
+        <repository>
+            <id>github-framework-sdk-llm</id>
+            <url>https://maven.pkg.github.com/workers-world/framework-sdk-llm</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>true</enabled></snapshots>
+        </repository>
+    </repositories>
+
     <build>
         <plugins>
             <plugin>
