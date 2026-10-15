@@ -1,10 +1,9 @@
+# workers-world actions bundle: actions/v0.5.0（禁止 @master）
 name: CI
 
-# workers-world actions bundle: actions/v0.4.14（禁止 @master）
 on:
   push:
     branches: ["dev_*"]
-    tags: ["v*"]
   pull_request:
     branches: ["master"]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -13,18 +12,18 @@ permissions:
   contents: read
   packages: write
 
-# concurrency 由 java-maven-sdk-ci reusable 负责；caller 勿再声明同名 group（会与嵌套 workflow 死锁）。
+# concurrency 由 java-maven-sdk-ci reusable 负责（经 concurrency_group）；caller 勿再声明同名 group，否则与嵌套 workflow 死锁。
 
 jobs:
   ci:
-    uses: workers-world/.github/.github/workflows/java-maven-sdk-ci.yml@actions/v0.4.21
+    uses: workers-world/java-actions/.github/workflows/java-maven-sdk-ci.yml@actions/v0.5.0
     secrets:
       GITHUB_PACKAGES_TOKEN: ${{ secrets.GITHUB_PACKAGES_TOKEN }}
-      WORKERS_WORLD_GHA_TOKEN: ${{ secrets.WORKERS_WORLD_GHA_TOKEN }}
+      GHA_TOKEN: ${{ secrets.GHA_TOKEN }}
     with:
       github_packages_repo: framework-sdk-llm
       server_id: github-framework-sdk-llm
-      publish_on_push: ${{ github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v') }}
+      publish_on_push: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'dev_') && github.ref_type == 'branch' }}
       concurrency_group: sdk-ci-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
       github_packages_repos_for_verify: framework-sdk:github-framework-sdk
       maven_goals: verify

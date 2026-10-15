@@ -1,2 +1,6 @@
 target/
-.idea
+.idea/
+*.iml
+.claude/
+.DS_Store
+*.log

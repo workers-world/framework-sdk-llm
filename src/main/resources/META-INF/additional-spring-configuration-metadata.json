@@ -27,11 +27,6 @@
       "type": "java.lang.String",
       "description": "Default LLM model id.",
       "defaultValue": "gpt-4o"
-    },
-    {
-      "name": "book.llm.auto-classify.cron",
-      "type": "java.lang.String",
-      "description": "Cron expression for automatic LLM classification task."
     }
   ]
 }
