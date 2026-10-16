@@ -20,7 +20,7 @@ jobs:
       github.actor != 'github-actions[bot]' &&
       github.event.repository.default_branch != github.ref_name
     permissions: {}
-    uses: workers-world/worker-actions/.github/workflows/worker-sync-default-dev-branch.yml@actions/v0.2.30
+    uses: workers-world/worker-actions/.github/workflows/worker-sync-default-dev-branch.yml@actions/v0.2.33
     secrets: inherit
     with:
       push_branch: ${{ github.ref_name }}
